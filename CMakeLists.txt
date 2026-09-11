@@ -8,3 +8,5 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra")
 add_executable(console_ui src/main.c)
 
 target_link_libraries(console_ui raylib m pthread dl)
+
+file(COPY assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

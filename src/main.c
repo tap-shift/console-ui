@@ -33,8 +33,37 @@ int main(void) {
     // Set fullscreen (if running on gamescope, standard borderless works well)
     ToggleFullscreen();
 
+    // Audio setup
+    InitAudioDevice();
+
+    // Load Sounds with clean fallback
+    Sound sound_nav = {0};
+    if (FileExists("assets/sounds/nav.wav")) sound_nav = LoadSound("assets/sounds/nav.wav");
+    Sound sound_select = {0};
+    if (FileExists("assets/sounds/select.wav")) sound_select = LoadSound("assets/sounds/select.wav");
+    Sound sound_back = {0};
+    if (FileExists("assets/sounds/back.wav")) sound_back = LoadSound("assets/sounds/back.wav");
+
+    // Load Textures with clean fallback
+    Texture2D tex_icons[MENU_ITEM_COUNT] = {0};
+    const char* image_paths[MENU_ITEM_COUNT] = {
+        "assets/images/games.png",
+        "assets/images/media.png",
+        "assets/images/terminal.png",
+        "assets/images/settings.png"
+    };
+    for (int i = 0; i < MENU_ITEM_COUNT; i++) {
+        if (FileExists(image_paths[i])) {
+            tex_icons[i] = LoadTexture(image_paths[i]);
+        }
+    }
+
+    // Intercept ESC to play sound before exiting
+    SetExitKey(KEY_NULL);
+
     // Application state
     int current_selection = 0;
+    bool should_close = false;
 
     // Animation state
     float card_scales[MENU_ITEM_COUNT] = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -43,12 +72,13 @@ int main(void) {
     bool gamepad_pressed_right = false;
 
     // Main game loop
-    while (!WindowShouldClose()) {
+    while (!WindowShouldClose() && !should_close) {
 
         // Input Handling
         bool move_left = IsKeyPressed(KEY_LEFT);
         bool move_right = IsKeyPressed(KEY_RIGHT);
         bool select = IsKeyPressed(KEY_ENTER);
+        bool back = IsKeyPressed(KEY_ESCAPE);
 
         if (IsGamepadAvailable(0)) {
             // D-Pad
@@ -76,19 +106,32 @@ int main(void) {
                 IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
                 select = true;
             }
+
+            // B / Back
+            if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
+                back = true;
+            }
         }
 
         if (move_left) {
             current_selection--;
             if (current_selection < 0) current_selection = 0;
+            else if (IsSoundReady(sound_nav)) PlaySound(sound_nav);
         }
         if (move_right) {
             current_selection++;
             if (current_selection >= MENU_ITEM_COUNT) current_selection = MENU_ITEM_COUNT - 1;
+            else if (IsSoundReady(sound_nav)) PlaySound(sound_nav);
         }
 
         if (select) {
+            if (IsSoundReady(sound_select)) PlaySound(sound_select);
             printf("Selected: %s\n", menu_items[current_selection]);
+        }
+
+        if (back) {
+            if (IsSoundReady(sound_back)) PlaySound(sound_back);
+            should_close = true;
         }
 
         // Update Logic
@@ -146,6 +189,24 @@ int main(void) {
                 DrawRectangleRounded(rect, 0.1f, 16, COLOR_CARD_IDLE);
             }
 
+            // Draw icon or fallback
+            if (IsTextureReady(tex_icons[i])) {
+                // Scale texture down if necessary to fit nicely, center it
+                float max_icon_size = w * 0.6f;
+                float tex_scale = 1.0f;
+                if (tex_icons[i].width > max_icon_size) tex_scale = max_icon_size / tex_icons[i].width;
+
+                Vector2 pos = {
+                    x - (tex_icons[i].width * tex_scale) / 2.0f,
+                    y - (tex_icons[i].height * tex_scale) / 2.0f - 20
+                };
+                DrawTextureEx(tex_icons[i], pos, 0.0f, tex_scale, WHITE);
+            } else {
+                // Fallback graphic (accent colored rectangle)
+                Rectangle fallback_rect = { x - 40, y - 40 - 20, 80, 80 };
+                DrawRectangleRounded(fallback_rect, 0.2f, 8, COLOR_ACCENT);
+            }
+
             // Draw card text
             int text_width = MeasureText(menu_items[i], 30);
             Color text_color = (i == current_selection) ? COLOR_TEXT_MAIN : COLOR_TEXT_MUTED;
@@ -161,6 +222,20 @@ int main(void) {
     }
 
     // De-Initialization
+
+    // Unload textures
+    for (int i = 0; i < MENU_ITEM_COUNT; i++) {
+        if (IsTextureReady(tex_icons[i])) {
+            UnloadTexture(tex_icons[i]);
+        }
+    }
+
+    // Unload sounds
+    if (IsSoundReady(sound_nav)) UnloadSound(sound_nav);
+    if (IsSoundReady(sound_select)) UnloadSound(sound_select);
+    if (IsSoundReady(sound_back)) UnloadSound(sound_back);
+
+    CloseAudioDevice();
     CloseWindow();
 
     return 0;
