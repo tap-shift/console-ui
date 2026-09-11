@@ -116,21 +116,21 @@ int main(void) {
         if (move_left) {
             current_selection--;
             if (current_selection < 0) current_selection = 0;
-            else if (IsSoundReady(sound_nav)) PlaySound(sound_nav);
+            else if ((sound_nav.stream.buffer != NULL)) PlaySound(sound_nav);
         }
         if (move_right) {
             current_selection++;
             if (current_selection >= MENU_ITEM_COUNT) current_selection = MENU_ITEM_COUNT - 1;
-            else if (IsSoundReady(sound_nav)) PlaySound(sound_nav);
+            else if ((sound_nav.stream.buffer != NULL)) PlaySound(sound_nav);
         }
 
         if (select) {
-            if (IsSoundReady(sound_select)) PlaySound(sound_select);
+            if ((sound_select.stream.buffer != NULL)) PlaySound(sound_select);
             printf("Selected: %s\n", menu_items[current_selection]);
         }
 
         if (back) {
-            if (IsSoundReady(sound_back)) PlaySound(sound_back);
+            if ((sound_back.stream.buffer != NULL)) PlaySound(sound_back);
             should_close = true;
         }
 
@@ -190,7 +190,7 @@ int main(void) {
             }
 
             // Draw icon or fallback
-            if (IsTextureReady(tex_icons[i])) {
+            if ((tex_icons[i].id > 0)) {
                 // Scale texture down if necessary to fit nicely, center it
                 float max_icon_size = w * 0.6f;
                 float tex_scale = 1.0f;
@@ -225,15 +225,15 @@ int main(void) {
 
     // Unload textures
     for (int i = 0; i < MENU_ITEM_COUNT; i++) {
-        if (IsTextureReady(tex_icons[i])) {
+        if ((tex_icons[i].id > 0)) {
             UnloadTexture(tex_icons[i]);
         }
     }
 
     // Unload sounds
-    if (IsSoundReady(sound_nav)) UnloadSound(sound_nav);
-    if (IsSoundReady(sound_select)) UnloadSound(sound_select);
-    if (IsSoundReady(sound_back)) UnloadSound(sound_back);
+    if ((sound_nav.stream.buffer != NULL)) UnloadSound(sound_nav);
+    if ((sound_select.stream.buffer != NULL)) UnloadSound(sound_select);
+    if ((sound_back.stream.buffer != NULL)) UnloadSound(sound_back);
 
     CloseAudioDevice();
     CloseWindow();
