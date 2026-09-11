@@ -380,7 +380,7 @@ int main(void) {
                     DrawRectangleRounded(rect, 0.1f, 16, COLOR_CARD_FOCUS);
                 } else {
                     DrawRectangleRounded(rect, 0.1f, 16, COLOR_CARD_IDLE);
-                    DrawRectangleRoundedLinesEx(rect, 0.1f, 16, 1.0f, COLOR_TEXT_MUTED);
+                    DrawRectangleRoundedLines(rect, 0.1f, 16, 1, COLOR_TEXT_MUTED);
                 }
 
                 if (tex_icons[i].id > 0) {
