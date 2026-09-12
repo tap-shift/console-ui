@@ -534,11 +534,17 @@ void* BackendWorkerThread(void* arg) {
                     cJSON *json = cJSON_Parse(chunk.memory);
                     if (json != NULL) {
                         connected = true;
-                        cJSON *total = cJSON_GetObjectItemCaseSensitive(json, "total_bytes");
-                        cJSON *free_b = cJSON_GetObjectItemCaseSensitive(json, "free_bytes");
-                        if (cJSON_IsNumber(total) && cJSON_IsNumber(free_b)) {
-                            tb = (long long)total->valuedouble;
-                            fb = (long long)free_b->valuedouble;
+                        cJSON *pools = cJSON_GetObjectItemCaseSensitive(json, "storage_pools");
+                        if (cJSON_IsArray(pools)) {
+                            cJSON *pool = cJSON_GetArrayItem(pools, 0);
+                            if (pool != NULL) {
+                                cJSON *total = cJSON_GetObjectItemCaseSensitive(pool, "total_bytes");
+                                cJSON *free_b = cJSON_GetObjectItemCaseSensitive(pool, "free_bytes");
+                                if (cJSON_IsNumber(total) && cJSON_IsNumber(free_b)) {
+                                    tb = (long long)total->valuedouble;
+                                    fb = (long long)free_b->valuedouble;
+                                }
+                            }
                         }
                         cJSON_Delete(json);
                     }
@@ -795,7 +801,7 @@ int main(void) {
                         IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) ||
                         IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) ||
                         IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT) ||
-                        IsGamepadButtonPressed(i, 1) || IsGamepadButtonPressed(i, 2)) {
+                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_LEFT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_UP) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_MIDDLE_RIGHT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_TRIGGER_1) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) {
                         active_gamepad = i;
                         break;
                     } else if (!IsGamepadAvailable(active_gamepad)) {
@@ -838,21 +844,21 @@ int main(void) {
                 if (fabs(axis_y) < 0.25f) axis_y = 0.0f;
 
                 if (effective_profile == PROFILE_PS2_LEGACY) {
-                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || (axis_x < -0.5f && (current_time - last_nav_time > 0.3))) {
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || (axis_x < -0.25f && (current_time - last_nav_time > 0.3))) {
                         move_left = true;
-                        if (axis_x < -0.5f) last_nav_time = current_time;
+                        if (axis_x < -0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT)) last_nav_time = current_time;
                     }
-                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || (axis_x > 0.5f && (current_time - last_nav_time > 0.3))) {
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || (axis_x > 0.25f && (current_time - last_nav_time > 0.3))) {
                         move_right = true;
-                        if (axis_x > 0.5f) last_nav_time = current_time;
+                        if (axis_x > 0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) last_nav_time = current_time;
                     }
-                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP) || (axis_y < -0.5f && (current_time - last_nav_time > 0.3))) {
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP) || (axis_y < -0.25f && (current_time - last_nav_time > 0.3))) {
                         move_up = true;
-                        if (axis_y < -0.5f) last_nav_time = current_time;
+                        if (axis_y < -0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP)) last_nav_time = current_time;
                     }
-                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || (axis_y > 0.5f && (current_time - last_nav_time > 0.3))) {
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || (axis_y > 0.25f && (current_time - last_nav_time > 0.3))) {
                         move_down = true;
-                        if (axis_y > 0.5f) last_nav_time = current_time;
+                        if (axis_y > 0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN)) last_nav_time = current_time;
                     }
 
                     if (IsGamepadButtonPressed(active_gamepad, 2)) select = true;
@@ -860,21 +866,21 @@ int main(void) {
                     if (IsGamepadButtonPressed(active_gamepad, 3)) toggle_notif = true;
                     if (IsGamepadButtonPressed(active_gamepad, 0)) trigger_update = true;
                 } else {
-                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || (axis_x < -0.5f && (current_time - last_nav_time > 0.3))) {
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || (axis_x < -0.25f && (current_time - last_nav_time > 0.3))) {
                         move_left = true;
-                        if (axis_x < -0.5f) last_nav_time = current_time;
+                        if (axis_x < -0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT)) last_nav_time = current_time;
                     }
-                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || (axis_x > 0.5f && (current_time - last_nav_time > 0.3))) {
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || (axis_x > 0.25f && (current_time - last_nav_time > 0.3))) {
                         move_right = true;
-                        if (axis_x > 0.5f) last_nav_time = current_time;
+                        if (axis_x > 0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) last_nav_time = current_time;
                     }
-                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP) || (axis_y < -0.5f && (current_time - last_nav_time > 0.3))) {
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP) || (axis_y < -0.25f && (current_time - last_nav_time > 0.3))) {
                         move_up = true;
-                        if (axis_y < -0.5f) last_nav_time = current_time;
+                        if (axis_y < -0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP)) last_nav_time = current_time;
                     }
-                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || (axis_y > 0.5f && (current_time - last_nav_time > 0.3))) {
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || (axis_y > 0.25f && (current_time - last_nav_time > 0.3))) {
                         move_down = true;
-                        if (axis_y > 0.5f) last_nav_time = current_time;
+                        if (axis_y > 0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN)) last_nav_time = current_time;
                     }
 
                     if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT)) select = true;
@@ -1071,7 +1077,7 @@ int main(void) {
                         IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) ||
                         IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) ||
                         IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT) ||
-                        IsGamepadButtonPressed(i, 1) || IsGamepadButtonPressed(i, 2)) {
+                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_LEFT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_UP) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_MIDDLE_RIGHT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_TRIGGER_1) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) {
                         active_gamepad = i;
                         break;
                     } else if (!IsGamepadAvailable(active_gamepad)) {
@@ -1113,21 +1119,21 @@ int main(void) {
                 if (fabs(axis_x) < 0.25f) axis_x = 0.0f; // Deadzone
                 if (fabs(axis_y) < 0.25f) axis_y = 0.0f;
 
-                if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || (axis_x < -0.5f && (current_time - last_nav_time > 0.3))) {
+                if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || (axis_x < -0.25f && (current_time - last_nav_time > 0.3))) {
                     move_left = true;
-                    if (axis_x < -0.5f) last_nav_time = current_time;
+                    if (axis_x < -0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT)) last_nav_time = current_time;
                 }
-                if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || (axis_x > 0.5f && (current_time - last_nav_time > 0.3))) {
+                if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || (axis_x > 0.25f && (current_time - last_nav_time > 0.3))) {
                     move_right = true;
-                    if (axis_x > 0.5f) last_nav_time = current_time;
+                    if (axis_x > 0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) last_nav_time = current_time;
                 }
-                if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP) || (axis_y < -0.5f && (current_time - last_nav_time > 0.3))) {
+                if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP) || (axis_y < -0.25f && (current_time - last_nav_time > 0.3))) {
                     move_up = true;
-                    if (axis_y < -0.5f) last_nav_time = current_time;
+                    if (axis_y < -0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP)) last_nav_time = current_time;
                 }
-                if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || (axis_y > 0.5f && (current_time - last_nav_time > 0.3))) {
+                if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || (axis_y > 0.25f && (current_time - last_nav_time > 0.3))) {
                     move_down = true;
-                    if (axis_y > 0.5f) last_nav_time = current_time;
+                    if (axis_y > 0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN)) last_nav_time = current_time;
                 }
 
                 if (effective_profile == PROFILE_PS2_LEGACY) {
@@ -1259,7 +1265,7 @@ int main(void) {
                         IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) ||
                         IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) ||
                         IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT) ||
-                        IsGamepadButtonPressed(i, 1) || IsGamepadButtonPressed(i, 2)) {
+                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_LEFT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_UP) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_MIDDLE_RIGHT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_TRIGGER_1) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) {
                         active_gamepad = i;
                         break;
                     } else if (!IsGamepadAvailable(active_gamepad)) {
@@ -1674,9 +1680,21 @@ int main(void) {
 
                 double tb_gb = (double)tb / (1024.0 * 1024.0 * 1024.0);
                 double fb_gb = (double)fb / (1024.0 * 1024.0 * 1024.0);
+                double ub_gb = tb_gb - fb_gb;
 
-                char storage_text[256];
-                snprintf(storage_text, sizeof(storage_text), "Total Storage: %.2f GB\nFree Storage: %.2f GB", tb_gb, fb_gb);
+                char storage_text[512];
+                char tb_str[64], fb_str[64], ub_str[64];
+
+                if (tb_gb >= 1000.0) snprintf(tb_str, sizeof(tb_str), "%.2f TB", tb_gb / 1024.0);
+                else snprintf(tb_str, sizeof(tb_str), "%.1f GB", tb_gb);
+
+                if (fb_gb >= 1000.0) snprintf(fb_str, sizeof(fb_str), "%.2f TB", fb_gb / 1024.0);
+                else snprintf(fb_str, sizeof(fb_str), "%.1f GB", fb_gb);
+
+                if (ub_gb >= 1000.0) snprintf(ub_str, sizeof(ub_str), "%.2f TB", ub_gb / 1024.0);
+                else snprintf(ub_str, sizeof(ub_str), "%.1f GB", ub_gb);
+
+                snprintf(storage_text, sizeof(storage_text), "Total Storage: %s\nUsed Storage: %s\nFree Storage: %s", tb_str, ub_str, fb_str);
 
                 DrawText(storage_text, right_x, right_y, 24, COLOR_TEXT_MAIN);
             }
