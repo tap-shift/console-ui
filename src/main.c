@@ -19,10 +19,10 @@ void DrawRectangleRoundedLinesEx(Rectangle rec, float roundness, int segments, f
 #define SCREEN_HEIGHT 1080
 
 // Palette
-static const Color COLOR_BG = { 13, 17, 23, 255 };
-static const Color COLOR_CARD_IDLE = { 22, 27, 34, 180 };
-static const Color COLOR_CARD_FOCUS = { 33, 40, 50, 220 };
-static const Color COLOR_ACCENT = { 0, 242, 254, 255 };
+static const Color COLOR_BG = { 13, 17, 23, 255 }; // #0d1117
+static const Color COLOR_CARD_IDLE = { 22, 27, 34, 180 }; // #161b22 translucent
+static const Color COLOR_CARD_FOCUS = { 33, 40, 50, 220 }; // #212832 translucent
+static const Color COLOR_ACCENT = { 0, 242, 254, 255 }; // #00f2fe
 static const Color COLOR_TEXT_MAIN = { 240, 240, 240, 255 };
 static const Color COLOR_TEXT_MUTED = { 150, 150, 150, 255 };
 static const Color COLOR_TOPBAR = { 13, 17, 23, 220 };
@@ -39,7 +39,8 @@ static const char* menu_items[MENU_ITEM_COUNT] = {
 typedef enum {
     STATE_DASHBOARD,
     STATE_UPDATING,
-    STATE_SETTINGS
+    STATE_SETTINGS,
+    STATE_CONTROLLER_TEST
 } AppUIState;
 
 AppUIState current_state = STATE_DASHBOARD;
@@ -52,6 +53,38 @@ typedef enum {
 } ControllerProfile;
 
 ControllerProfile active_profile = PROFILE_AUTO;
+
+int settings_tab = 0;
+int settings_row = 0;
+bool settings_focus_right_pane = false;
+int active_audio_device = 0;
+
+#define MAX_AUDIO_SINKS 16
+char* actual_audio_sinks[MAX_AUDIO_SINKS];
+int actual_audio_sink_count = 0;
+const char* audio_sinks[2] = {
+    "Built-in Audio Analog Stereo",
+    "DualSense Wireless Controller Audio"
+};
+
+void PopulateAudioDevices() {
+    FILE* fp = popen("pactl list short sinks 2>/dev/null | awk '{print $2}'", "r");
+    if (fp != NULL) {
+        char buffer[256];
+        while (fgets(buffer, sizeof(buffer), fp) != NULL && actual_audio_sink_count < MAX_AUDIO_SINKS) {
+            buffer[strcspn(buffer, "\n")] = 0;
+            actual_audio_sinks[actual_audio_sink_count] = strdup(buffer);
+
+            // Prioritize analog output
+            if (strstr(buffer, "analog") != NULL || strstr(buffer, "alc") != NULL || strstr(buffer, "realtek") != NULL) {
+                active_audio_device = actual_audio_sink_count; // Set as default if matched
+            }
+
+            actual_audio_sink_count++;
+        }
+        pclose(fp);
+    }
+}
 
 bool update_available = false;
 pthread_mutex_t update_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -170,10 +203,12 @@ void* UpdateInstallerThread(void* arg) {
 }
 
 int main(void) {
+    PopulateAudioDevices();
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Console UI");
     SetTargetFPS(60);
     ToggleFullscreen();
     InitAudioDevice();
+    SetMasterVolume(2.0f); // High-end software boost gain
 
     Sound sound_nav = {0};
     if (FileExists("assets/sounds/hover.ogg")) sound_nav = LoadSound("assets/sounds/hover.ogg");
@@ -401,7 +436,9 @@ int main(void) {
         } else if (state_copy == STATE_SETTINGS) {
             bool move_left = IsKeyPressed(KEY_LEFT);
             bool move_right = IsKeyPressed(KEY_RIGHT);
-            bool toggle_mute = IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER);
+            bool move_up = IsKeyPressed(KEY_UP);
+            bool move_down = IsKeyPressed(KEY_DOWN);
+            bool confirm = IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER);
             bool back = IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_B);
 
             if (IsGamepadAvailable(0)) {
@@ -419,7 +456,9 @@ int main(void) {
                 double current_time = GetTime();
 
                 float axis_x = GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_X);
+                float axis_y = GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_Y);
                 if (fabs(axis_x) < 0.25f) axis_x = 0.0f; // Deadzone
+                if (fabs(axis_y) < 0.25f) axis_y = 0.0f;
 
                 if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || (axis_x < -0.5f && (current_time - last_nav_time > 0.3))) {
                     move_left = true;
@@ -429,38 +468,128 @@ int main(void) {
                     move_right = true;
                     if (axis_x > 0.5f) last_nav_time = current_time;
                 }
+                if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_UP) || (axis_y < -0.5f && (current_time - last_nav_time > 0.3))) {
+                    move_up = true;
+                    if (axis_y < -0.5f) last_nav_time = current_time;
+                }
+                if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || (axis_y > 0.5f && (current_time - last_nav_time > 0.3))) {
+                    move_down = true;
+                    if (axis_y > 0.5f) last_nav_time = current_time;
+                }
 
                 if (effective_profile == PROFILE_PS2_LEGACY) {
                     if (IsGamepadButtonPressed(0, 1)) back = true;
+                    if (IsGamepadButtonPressed(0, 2)) confirm = true;
                 } else {
                     if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) back = true;
+                    if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) confirm = true;
                 }
             }
 
-            if (toggle_mute) {
-                if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
-                bgm_muted = !bgm_muted;
-                if (bgm.stream.buffer != NULL) {
-                    SetMusicVolume(bgm, bgm_muted ? 0.0f : 0.2f);
-                }
-            }
+            int prev_tab = settings_tab;
+            int prev_row = settings_row;
+            bool prev_focus = settings_focus_right_pane;
 
-            ControllerProfile prev_profile = active_profile;
             if (move_left) {
-                if (active_profile > 0) active_profile--;
+                settings_focus_right_pane = false;
             }
             if (move_right) {
-                if (active_profile < 3) active_profile++;
+                settings_focus_right_pane = true;
             }
 
-            if (active_profile != prev_profile) {
+            int max_rows = 1;
+            if (settings_tab == 0) max_rows = 2; // Audio has 2 rows
+            if (settings_tab == 1) max_rows = 2; // Input has 2 rows (profile, test)
+
+            if (!settings_focus_right_pane) {
+                if (move_up) {
+                    settings_tab--;
+                    if (settings_tab < 0) settings_tab = 0;
+                    settings_row = 0;
+                }
+                if (move_down) {
+                    settings_tab++;
+                    if (settings_tab > 3) settings_tab = 3;
+                    settings_row = 0;
+                }
+            } else {
+                if (move_up) {
+                    settings_row--;
+                    if (settings_row < 0) settings_row = 0;
+                }
+                if (move_down) {
+                    settings_row++;
+                    if (settings_row >= max_rows) settings_row = max_rows - 1;
+                }
+            }
+
+            if (settings_tab != prev_tab || settings_row != prev_row || settings_focus_right_pane != prev_focus) {
                 if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
+            }
+
+            if (confirm && !settings_focus_right_pane) {
+                settings_focus_right_pane = true;
+                if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
+            } else if (confirm && settings_focus_right_pane) {
+                if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
+                if (settings_tab == 0 && settings_row == 0) {
+                    // Toggle Mute
+                    bgm_muted = !bgm_muted;
+                    if (bgm.stream.buffer != NULL) {
+                        SetMusicVolume(bgm, bgm_muted ? 0.0f : 0.2f);
+                    }
+                } else if (settings_tab == 0 && settings_row == 1) {
+                    // Cycle Audio Sink
+                    if (actual_audio_sink_count > 0) {
+                        active_audio_device = (active_audio_device + 1) % actual_audio_sink_count;
+                        char cmd[512];
+                        snprintf(cmd, sizeof(cmd), "pactl set-default-sink %s > /dev/null 2>&1 &", actual_audio_sinks[active_audio_device]);
+                        system(cmd);
+                    }
+                } else if (settings_tab == 1 && settings_row == 0) {
+                    // Cycle Input Profile
+                    if (active_profile < 3) active_profile++;
+                    else active_profile = 0;
+                } else if (settings_tab == 1 && settings_row == 1) {
+                    // Enter Controller Test
+                    pthread_mutex_lock(&update_mutex);
+                    current_state = STATE_CONTROLLER_TEST;
+                    pthread_mutex_unlock(&update_mutex);
+                }
             }
 
             if (back) {
                 if (sound_back.stream.buffer != NULL) PlaySound(sound_back);
                 pthread_mutex_lock(&update_mutex);
                 current_state = STATE_DASHBOARD;
+                pthread_mutex_unlock(&update_mutex);
+            }
+        } else if (state_copy == STATE_CONTROLLER_TEST) {
+            bool back = IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_B);
+
+            if (IsGamepadAvailable(0)) {
+                ControllerProfile effective_profile = active_profile;
+                if (effective_profile == PROFILE_AUTO) {
+                    const char* gp_name = GetGamepadName(0);
+                    if (gp_name != NULL && (strstr(gp_name, "Sony") != NULL || strstr(gp_name, "DualSense") != NULL || strstr(gp_name, "PS5") != NULL)) {
+                        effective_profile = PROFILE_PS5;
+                    } else {
+                        effective_profile = PROFILE_XBOX;
+                    }
+                }
+
+                if (effective_profile == PROFILE_PS2_LEGACY) {
+                    if (IsGamepadButtonPressed(0, 1)) back = true;
+                } else {
+                    if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) back = true;
+                    if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE)) back = true; // PS button / Guide
+                }
+            }
+
+            if (back) {
+                if (sound_back.stream.buffer != NULL) PlaySound(sound_back);
+                pthread_mutex_lock(&update_mutex);
+                current_state = STATE_SETTINGS;
                 pthread_mutex_unlock(&update_mutex);
             }
         }
@@ -491,12 +620,13 @@ int main(void) {
                 Rectangle rect = { x - w / 2.0f, y - h / 2.0f, w, h };
 
                 if (i == current_selection) {
-                    Rectangle glow_rect = { rect.x - 6, rect.y - 6, rect.width + 12, rect.height + 12 };
-                    DrawRectangleRounded(glow_rect, 0.1f, 16, COLOR_ACCENT);
+                    Rectangle glow_rect = { rect.x - 8, rect.y - 8, rect.width + 16, rect.height + 16 };
+                    DrawRectangleRounded(glow_rect, 0.1f, 16, Fade(COLOR_ACCENT, 0.4f));
                     DrawRectangleRounded(rect, 0.1f, 16, COLOR_CARD_FOCUS);
+                    DrawRectangleRoundedLinesEx(rect, 0.1f, 16, 2.0f, COLOR_ACCENT); // micro-border
                 } else {
-                    DrawRectangleRounded(rect, 0.1f, 16, COLOR_CARD_IDLE);
-                    DrawRectangleRoundedLinesEx(rect, 0.1f, 16, 1.0f, COLOR_TEXT_MUTED);
+                    DrawRectangleRounded(rect, 0.1f, 16, Fade(COLOR_CARD_IDLE, 0.8f));
+                    DrawRectangleRoundedLinesEx(rect, 0.1f, 16, 1.0f, Fade(COLOR_TEXT_MUTED, 0.5f));
                 }
 
                 if (tex_icons[i].id > 0) {
@@ -522,7 +652,10 @@ int main(void) {
 
             // Top Bar
             DrawRectangle(0, 0, SCREEN_WIDTH, 60, COLOR_TOPBAR);
-            DrawText("CONSOLE-BOX", 40, 20, 22, COLOR_TEXT_MAIN);
+
+            char host_buffer[256] = "CONSOLE-BOX";
+            gethostname(host_buffer, sizeof(host_buffer));
+            DrawText(host_buffer, 40, 20, 22, COLOR_TEXT_MAIN);
 
             time_t t = time(NULL);
             struct tm tm_info;
@@ -533,18 +666,21 @@ int main(void) {
             int time_width = MeasureText(time_str, 22);
             DrawText(time_str, SCREEN_WIDTH - time_width - 40, 20, 22, COLOR_TEXT_MAIN);
 
+            // Audio Device Status
+            DrawText("[Audio Device]", SCREEN_WIDTH - time_width - 200, 20, 20, COLOR_ACCENT);
+
             // Network / Status
-            DrawText("Network: UP", SCREEN_WIDTH - time_width - 180, 20, 20, COLOR_TEXT_MUTED);
+            DrawText("Network: UP", SCREEN_WIDTH - time_width - 350, 20, 20, COLOR_TEXT_MUTED);
 
             // Notifications Bell
-            DrawText("Bell (X)", SCREEN_WIDTH - time_width - 320, 20, 20, COLOR_TEXT_MAIN);
+            DrawText("Bell (X)", SCREEN_WIDTH - time_width - 460, 20, 20, COLOR_TEXT_MAIN);
 
             pthread_mutex_lock(&notif_mutex);
             int unread = unread_notifications;
             pthread_mutex_unlock(&notif_mutex);
 
             if (unread > 0) {
-                DrawCircle(SCREEN_WIDTH - time_width - 230, 20, 6, COLOR_ACCENT);
+                DrawCircle(SCREEN_WIDTH - time_width - 370, 20, 6, COLOR_ACCENT);
             }
 
             // Update Chip
@@ -588,29 +724,100 @@ int main(void) {
 
         } else if (render_state == STATE_SETTINGS) {
             DrawRectangle(0, 0, SCREEN_WIDTH, 60, COLOR_TOPBAR);
-            DrawText("Controller & Input", 40, 20, 22, COLOR_TEXT_MAIN);
+            DrawText("System Settings", 40, 20, 22, COLOR_TEXT_MAIN);
+
+            // Left Column (Categories)
+            float left_w = 400.0f;
+            DrawRectangle(0, 60, left_w, SCREEN_HEIGHT - 60, COLOR_CARD_IDLE);
+            if (!settings_focus_right_pane) {
+                DrawRectangleLinesEx((Rectangle){0, 60, left_w, SCREEN_HEIGHT - 60}, 2.0f, COLOR_ACCENT);
+            } else {
+                DrawLine(left_w, 60, left_w, SCREEN_HEIGHT, Fade(COLOR_TEXT_MUTED, 0.3f));
+            }
+
+            const char* tabs[] = { "Audio & Sound", "Input & Gamepad", "Display & System", "Updates" };
+            for (int i = 0; i < 4; i++) {
+                float y = 100 + i * 80;
+                if (settings_tab == i) {
+                    DrawRectangle(0, y - 10, left_w, 60, COLOR_CARD_FOCUS);
+                    DrawRectangle(0, y - 10, 6, 60, (!settings_focus_right_pane) ? COLOR_ACCENT : Fade(COLOR_ACCENT, 0.3f));
+                    DrawText(tabs[i], 40, y + 10, 24, COLOR_TEXT_MAIN);
+                } else {
+                    DrawText(tabs[i], 40, y + 10, 24, COLOR_TEXT_MUTED);
+                }
+            }
+
+            // Right Column (Items)
+            float right_x = left_w + 40;
+            float right_y = 100;
+            float max_w = SCREEN_WIDTH - right_x - 80;
+
+            if (settings_tab == 0) { // Audio
+                DrawText("Audio Output Configuration", right_x, right_y, 30, COLOR_TEXT_MAIN);
+                right_y += 60;
+
+                // Mute Row
+                Color r_color = (settings_row == 0 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
+                if (settings_row == 0) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, r_color);
+                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, 2.0f, COLOR_ACCENT);
+
+                DrawText("Mute Master Audio", right_x, right_y, 24, COLOR_TEXT_MAIN);
+                DrawRectangleRounded((Rectangle){right_x + max_w - 120, right_y - 5, 120, 40}, 1.0f, 16, bgm_muted ? COLOR_CARD_IDLE : COLOR_ACCENT);
+                DrawText(bgm_muted ? "OFF" : "ON", right_x + max_w - 80, right_y + 5, 20, bgm_muted ? COLOR_TEXT_MUTED : COLOR_BG);
+                right_y += 80;
+
+                // Sink Row
+                extern int actual_audio_sink_count; // Defined later
+                extern char* actual_audio_sinks[]; // Defined later
+                r_color = (settings_row == 1 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
+                if (settings_row == 1) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, r_color);
+                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, 2.0f, COLOR_ACCENT);
+
+                DrawText("Output Device", right_x, right_y, 24, COLOR_TEXT_MAIN);
+                const char* disp_name = (actual_audio_sink_count > 0 && active_audio_device < actual_audio_sink_count) ? actual_audio_sinks[active_audio_device] : audio_sinks[0];
+                int dev_w = MeasureText(disp_name, 20);
+                DrawText(disp_name, right_x + max_w - dev_w - 20, right_y + 10, 20, (settings_row == 1 && settings_focus_right_pane) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
+
+            } else if (settings_tab == 1) { // Input
+                DrawText("Controller Configuration", right_x, right_y, 30, COLOR_TEXT_MAIN);
+                right_y += 60;
+
+                const char* profile_names[] = { "Auto Detect", "Modern Xbox", "PlayStation 5", "PS2 Legacy" };
+
+                // Profile Row
+                Color r_color = (settings_row == 0 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
+                if (settings_row == 0) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, r_color);
+                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, 2.0f, COLOR_ACCENT);
+                DrawText("Active Profile", right_x, right_y, 24, COLOR_TEXT_MAIN);
+                int pr_w = MeasureText(profile_names[(int)active_profile], 20);
+                DrawText(profile_names[(int)active_profile], right_x + max_w - pr_w - 20, right_y + 10, 20, (settings_row == 0 && settings_focus_right_pane) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
+                right_y += 80;
+
+                // Test Row
+                r_color = (settings_row == 1 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
+                if (settings_row == 1) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, r_color);
+                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, 2.0f, COLOR_ACCENT);
+                DrawText("Test Controller Mapping", right_x, right_y, 24, COLOR_TEXT_MAIN);
+                DrawText("START >", right_x + max_w - 100, right_y + 10, 20, (settings_row == 1 && settings_focus_right_pane) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
+            }
+
+            const char* legend = "(Up/Down) Select Item   (Left/Right) Change Tab / Option   (A) Confirm   (B) Back";
+            int lw = MeasureText(legend, 20);
+            DrawText(legend, (SCREEN_WIDTH - lw) / 2, SCREEN_HEIGHT - 40, 20, COLOR_TEXT_MUTED);
+
+        } else if (render_state == STATE_CONTROLLER_TEST) {
+            DrawRectangle(0, 0, SCREEN_WIDTH, 60, COLOR_TOPBAR);
+            DrawText("Controller Test Mode", 40, 20, 22, COLOR_TEXT_MAIN);
 
             float cx = SCREEN_WIDTH / 2.0f;
             float cy = SCREEN_HEIGHT / 2.0f;
 
+            DrawRectangle(cx - 400, cy - 300, 800, 600, COLOR_CARD_IDLE);
+            DrawRectangleRoundedLinesEx((Rectangle){cx - 400, cy - 300, 800, 600}, 0.1f, 16, 2.0f, COLOR_ACCENT);
+
             const char* gp_name = IsGamepadAvailable(0) ? GetGamepadName(0) : "No Gamepad Detected";
             int nw = MeasureText(gp_name, 24);
-            DrawText(gp_name, cx - nw / 2, cy - 200, 24, COLOR_TEXT_MAIN);
-
-            const char* profile_names[] = { "[ Auto Detect ]", "[ Modern Xbox ]", "[ PlayStation 5 ]", "[ PS2 Legacy (USB Adapter) ]" };
-
-            float total_pw = 0;
-            float spacing = 20;
-            for(int i=0; i<4; i++) total_pw += MeasureText(profile_names[i], 20);
-            total_pw += spacing * 3;
-
-            float px = cx - total_pw / 2;
-            for (int i = 0; i < 4; i++) {
-                int pw = MeasureText(profile_names[i], 20);
-                Color color = (i == (int)active_profile) ? COLOR_ACCENT : COLOR_TEXT_MUTED;
-                DrawText(profile_names[i], px, cy - 140, 20, color);
-                px += pw + spacing;
-            }
+            DrawText(gp_name, cx - nw / 2, cy - 250, 24, COLOR_TEXT_MAIN);
 
             // Visual Button Test Overlay
             float bx = cx + 200;
@@ -661,15 +868,23 @@ int main(void) {
 
             DrawCircle(sx + ax * 60, sy + ay * 60, 10, COLOR_ACCENT);
 
-            // Audio Toggle
-            float audio_y = cy + 180;
-            const char* audio_text = bgm_muted ? "BGM: Muted" : "BGM: Playing";
-            Color audio_color = bgm_muted ? COLOR_TEXT_MUTED : COLOR_ACCENT;
-            DrawRectangleRounded((Rectangle){ cx - 100, audio_y - 20, 200, 40 }, 0.5f, 10, bgm_muted ? COLOR_CARD_IDLE : COLOR_CARD_FOCUS);
-            int aw = MeasureText(audio_text, 20);
-            DrawText(audio_text, cx - aw / 2, audio_y - 10, 20, audio_color);
+            // Triggers
+            float l2 = GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_TRIGGER);
+            float r2 = GetGamepadAxisMovement(0, GAMEPAD_AXIS_RIGHT_TRIGGER);
+            if (l2 < -1.0f) l2 = -1.0f; // normalization may vary
+            if (r2 < -1.0f) r2 = -1.0f;
+            float l2_fill = (l2 + 1.0f) / 2.0f;
+            float r2_fill = (r2 + 1.0f) / 2.0f;
 
-            const char* legend = "(Up/Down/A) Toggle Mute   (Cancel/Back) Return";
+            DrawRectangleLines(cx - 300, cy - 150, 40, 100, COLOR_TEXT_MUTED);
+            DrawRectangle(cx - 300, cy - 150 + (1.0f - l2_fill) * 100, 40, l2_fill * 100, COLOR_ACCENT);
+            DrawText("L2/LT", cx - 300, cy - 180, 20, COLOR_TEXT_MUTED);
+
+            DrawRectangleLines(cx + 260, cy - 150, 40, 100, COLOR_TEXT_MUTED);
+            DrawRectangle(cx + 260, cy - 150 + (1.0f - r2_fill) * 100, 40, r2_fill * 100, COLOR_ACCENT);
+            DrawText("R2/RT", cx + 260, cy - 180, 20, COLOR_TEXT_MUTED);
+
+            const char* legend = "(B/Circle) or (ESC/Guide) Return";
             int lw = MeasureText(legend, 20);
             DrawText(legend, cx - lw / 2, SCREEN_HEIGHT - 40, 20, COLOR_TEXT_MUTED);
 
