@@ -11,6 +11,7 @@
 #include <cjson/cJSON.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 
 void GetConfigDir(char* out_path, size_t max_len) {
     const char* home = getenv("HOME");
@@ -126,13 +127,12 @@ char avatar_download_url[256] = "";
 
 
 typedef enum {
-    PROFILE_AUTO = 0,
+    PROFILE_PS5 = 0,
     PROFILE_XBOX,
-    PROFILE_PS5,
     PROFILE_PS2_LEGACY
 } ControllerProfile;
 
-ControllerProfile active_profile = PROFILE_AUTO;
+ControllerProfile active_profile = PROFILE_PS5;
 
 int settings_tab = 0;
 int settings_row = 0;
@@ -185,6 +185,8 @@ bool update_failed = false;
 char update_status_text[256] = "Initializing...";
 
 bool bgm_muted = false;
+
+bool game_running = false;
 
 void LoadSettings() {
     char config_dir[256];
@@ -298,8 +300,17 @@ void* GameLaunchThread(void* arg) {
     setenv("XDG_DATA_HOME", save_dir, 1);
 
     // Blocking execution
-    ret = system(game->launch_path);
-    (void)ret;
+    fprintf(stderr, "Launching: %s\n", game->launch_path);
+    game_running = true;
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl("/bin/sh", "sh", "-c", game->launch_path, (char *)NULL);
+        exit(1);
+    } else if (pid > 0) {
+        int status;
+        waitpid(pid, &status, 0);
+    }
+    game_running = false;
 
     // Tar the save dir
     char tar_path[512];
@@ -394,7 +405,11 @@ void* BackendWorkerThread(void* arg) {
                                 if (cJSON_IsString(id)) strncpy(users[i].id, id->valuestring, sizeof(users[i].id)-1);
                                 if (cJSON_IsString(username)) strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
                                 if (cJSON_IsString(avatar)) {
-                                    snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "%s%s", base_url, avatar->valuestring);
+                                    if (avatar->valuestring[0] == '/') {
+                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "http://192.168.222.181:8080%s", avatar->valuestring);
+                                    } else {
+                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "%s%s", base_url, avatar->valuestring);
+                                    }
                                 }
                             }
                             pthread_mutex_unlock(&backend_mutex);
@@ -449,7 +464,11 @@ void* BackendWorkerThread(void* arg) {
                                     strncpy(games[i].cover_url, cover_url->valuestring, sizeof(games[i].cover_url) - 1);
 
                                     char cover_full_url[512];
-                                    snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", base_url, cover_url->valuestring);
+                                    if (cover_url->valuestring[0] == '/') {
+                                        snprintf(cover_full_url, sizeof(cover_full_url), "http://192.168.222.181:8080%s", cover_url->valuestring);
+                                    } else {
+                                        snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", base_url, cover_url->valuestring);
+                                    }
 
                                     char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
                                     char cmd[512]; snprintf(cmd, sizeof(cmd), "mkdir -p \"%s/covers\"", cache_dir);
@@ -712,6 +731,8 @@ int main(void) {
     int dock_selection = -1; // -1 means focus is on the shelf
     int topbar_selection = -1; // -1 means not focused, 0: Profile, 1: Settings
     bool should_close = false;
+    bool show_profile_dropdown = false;
+    int dropdown_selection = 0;
     float spinner_angle = 0.0f;
     float camera_offset_x = 0.0f;
     float bg_fade = 0.0f;
@@ -724,10 +745,42 @@ int main(void) {
     pthread_t backend_thread;
     pthread_create(&backend_thread, NULL, BackendWorkerThread, NULL);
 
+    static int active_gamepad = 0;
+
     while (!WindowShouldClose() && !should_close) {
         if (bgm.stream.buffer != NULL) UpdateMusicStream(bgm);
 
         float dt = GetFrameTime();
+
+        static bool was_running = false;
+        if (game_running && !was_running) {
+            MinimizeWindow();
+            was_running = true;
+        }
+        if (!game_running && was_running) {
+            RestoreWindow();
+            was_running = false;
+        }
+
+        for (int i = 0; i < 4; i++) {
+            if (IsGamepadAvailable(i)) {
+                if (fabs(GetGamepadAxisMovement(i, GAMEPAD_AXIS_LEFT_X)) > 0.25f ||
+                    fabs(GetGamepadAxisMovement(i, GAMEPAD_AXIS_LEFT_Y)) > 0.25f ||
+                    GetGamepadButtonPressed() != KEY_NULL ||
+                    IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_UP) ||
+                    IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_DOWN) ||
+                    IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_LEFT) ||
+                    IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) ||
+                    IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) ||
+                    IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT) ||
+                    IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_LEFT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_UP) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_MIDDLE_RIGHT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_TRIGGER_1) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) {
+                    active_gamepad = i;
+                    break;
+                } else if (!IsGamepadAvailable(active_gamepad)) {
+                    active_gamepad = i;
+                }
+            }
+        }
 
         pthread_mutex_lock(&notif_mutex);
         if (notify_sound_pending) {
@@ -789,52 +842,7 @@ int main(void) {
             bool toggle_notif = IsKeyPressed(KEY_N) || IsKeyPressed(KEY_X);
             bool trigger_update = IsKeyPressed(KEY_U) || IsKeyPressed(KEY_Y);
 
-            static int active_gamepad = 0;
-            for (int i = 0; i < 4; i++) {
-                if (IsGamepadAvailable(i)) {
-                    if (fabs(GetGamepadAxisMovement(i, GAMEPAD_AXIS_LEFT_X)) > 0.25f ||
-                        fabs(GetGamepadAxisMovement(i, GAMEPAD_AXIS_LEFT_Y)) > 0.25f ||
-                        GetGamepadButtonPressed() != KEY_NULL || // This isn't strictly gamepad specific, but checking axis works as a start. Better below:
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_UP) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_DOWN) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_LEFT) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_LEFT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_UP) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_MIDDLE_RIGHT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_TRIGGER_1) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) {
-                        active_gamepad = i;
-                        break;
-                    } else if (!IsGamepadAvailable(active_gamepad)) {
-                        active_gamepad = i; // Fallback to first available if current is disconnected
-                    }
-                }
-            }
-
             if (IsGamepadAvailable(active_gamepad)) {
-                ControllerProfile effective_profile = active_profile;
-                if (effective_profile == PROFILE_AUTO) {
-                    const char* gp_name_orig = GetGamepadName(active_gamepad);
-                    if (gp_name_orig != NULL) {
-                        char gp_name[256];
-                        strncpy(gp_name, gp_name_orig, 255);
-                        gp_name[255] = '\0';
-                        for (int i = 0; gp_name[i]; i++) {
-                            if (gp_name[i] >= 'A' && gp_name[i] <= 'Z') {
-                                gp_name[i] += 32;
-                            }
-                        }
-                        if (strstr(gp_name, "dualsense") != NULL || strstr(gp_name, "dualshock") != NULL || strstr(gp_name, "sony") != NULL || strstr(gp_name, "ps5") != NULL || strstr(gp_name, "ps4") != NULL || strstr(gp_name, "054c") != NULL) {
-                            effective_profile = PROFILE_PS5;
-                        } else if (strstr(gp_name, "xbox") != NULL || strstr(gp_name, "x-box") != NULL || strstr(gp_name, "microsoft") != NULL) {
-                            effective_profile = PROFILE_XBOX;
-                        } else if (strstr(gp_name, "twin") != NULL || strstr(gp_name, "adapter") != NULL || strstr(gp_name, "usb gamepad") != NULL) {
-                            effective_profile = PROFILE_PS2_LEGACY;
-                        } else {
-                            effective_profile = PROFILE_XBOX;
-                        }
-                    }
-                }
-
                 static double last_nav_time = 0;
                 double current_time = GetTime();
 
@@ -843,7 +851,7 @@ int main(void) {
                 if (fabs(axis_x) < 0.25f) axis_x = 0.0f; // Deadzone
                 if (fabs(axis_y) < 0.25f) axis_y = 0.0f;
 
-                if (effective_profile == PROFILE_PS2_LEGACY) {
+                if (active_profile == PROFILE_PS2_LEGACY) {
                     if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || (axis_x < -0.25f && (current_time - last_nav_time > 0.3))) {
                         move_left = true;
                         if (axis_x < -0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT)) last_nav_time = current_time;
@@ -1063,54 +1071,7 @@ int main(void) {
             bool confirm = IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER);
             bool back = IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_B);
 
-            // Re-use active_gamepad from above block logically, we assume it's updated in the main loop per frame
-            // Let's re-run detection for fallback just in case
-            static int active_gamepad = 0;
-            for (int i = 0; i < 4; i++) {
-                if (IsGamepadAvailable(i)) {
-                    if (fabs(GetGamepadAxisMovement(i, GAMEPAD_AXIS_LEFT_X)) > 0.25f ||
-                        fabs(GetGamepadAxisMovement(i, GAMEPAD_AXIS_LEFT_Y)) > 0.25f ||
-                        GetGamepadButtonPressed() != KEY_NULL ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_UP) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_DOWN) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_LEFT) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_LEFT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_UP) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_MIDDLE_RIGHT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_TRIGGER_1) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) {
-                        active_gamepad = i;
-                        break;
-                    } else if (!IsGamepadAvailable(active_gamepad)) {
-                        active_gamepad = i;
-                    }
-                }
-            }
-
             if (IsGamepadAvailable(active_gamepad)) {
-                ControllerProfile effective_profile = active_profile;
-                if (effective_profile == PROFILE_AUTO) {
-                    const char* gp_name_orig = GetGamepadName(active_gamepad);
-                    if (gp_name_orig != NULL) {
-                        char gp_name[256];
-                        strncpy(gp_name, gp_name_orig, 255);
-                        gp_name[255] = '\0';
-                        for (int i = 0; gp_name[i]; i++) {
-                            if (gp_name[i] >= 'A' && gp_name[i] <= 'Z') {
-                                gp_name[i] += 32;
-                            }
-                        }
-                        if (strstr(gp_name, "dualsense") != NULL || strstr(gp_name, "dualshock") != NULL || strstr(gp_name, "sony") != NULL || strstr(gp_name, "ps5") != NULL || strstr(gp_name, "ps4") != NULL || strstr(gp_name, "054c") != NULL) {
-                            effective_profile = PROFILE_PS5;
-                        } else if (strstr(gp_name, "xbox") != NULL || strstr(gp_name, "x-box") != NULL || strstr(gp_name, "microsoft") != NULL) {
-                            effective_profile = PROFILE_XBOX;
-                        } else if (strstr(gp_name, "twin") != NULL || strstr(gp_name, "adapter") != NULL || strstr(gp_name, "usb gamepad") != NULL) {
-                            effective_profile = PROFILE_PS2_LEGACY;
-                        } else {
-                            effective_profile = PROFILE_XBOX;
-                        }
-                    }
-                }
-
                 static double last_nav_time = 0;
                 double current_time = GetTime();
 
@@ -1136,7 +1097,7 @@ int main(void) {
                     if (axis_y > 0.25f || IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN)) last_nav_time = current_time;
                 }
 
-                if (effective_profile == PROFILE_PS2_LEGACY) {
+                if (active_profile == PROFILE_PS2_LEGACY) {
                     if (IsGamepadButtonPressed(active_gamepad, 1)) back = true;
                     if (IsGamepadButtonPressed(active_gamepad, 2)) confirm = true;
                 } else {
@@ -1145,83 +1106,104 @@ int main(void) {
                 }
             }
 
-            int prev_tab = settings_tab;
-            int prev_row = settings_row;
-            bool prev_focus = settings_focus_right_pane;
-
-            if (move_left) {
-                settings_focus_right_pane = false;
-            }
-            if (move_right) {
-                settings_focus_right_pane = true;
-            }
-
-            int max_rows = 1;
-            if (settings_tab == 0) max_rows = 2; // Audio has 2 rows
-            if (settings_tab == 1) max_rows = 2; // Input has 2 rows (profile, test)
-
-            if (!settings_focus_right_pane) {
+            if (show_profile_dropdown) {
                 if (move_up) {
-                    settings_tab--;
-                    if (settings_tab < 0) settings_tab = 0;
-                    settings_row = 0;
+                    dropdown_selection--;
+                    if (dropdown_selection < 0) dropdown_selection = 0;
+                    if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
                 }
                 if (move_down) {
-                    settings_tab++;
-                    if (settings_tab > 3) settings_tab = 3;
-                    settings_row = 0;
+                    dropdown_selection++;
+                    if (dropdown_selection > 2) dropdown_selection = 2;
+                    if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
+                }
+                if (confirm) {
+                    active_profile = (ControllerProfile)dropdown_selection;
+                    show_profile_dropdown = false;
+                    if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
+                }
+                if (back) {
+                    show_profile_dropdown = false;
+                    if (sound_back.stream.buffer != NULL) PlaySound(sound_back);
                 }
             } else {
-                if (move_up) {
-                    settings_row--;
-                    if (settings_row < 0) settings_row = 0;
-                }
-                if (move_down) {
-                    settings_row++;
-                    if (settings_row >= max_rows) settings_row = max_rows - 1;
-                }
-            }
+                int prev_tab = settings_tab;
+                int prev_row = settings_row;
+                bool prev_focus = settings_focus_right_pane;
 
-            if (settings_tab != prev_tab || settings_row != prev_row || settings_focus_right_pane != prev_focus) {
-                if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
-            }
+                if (move_left) {
+                    settings_focus_right_pane = false;
+                }
+                if (move_right) {
+                    settings_focus_right_pane = true;
+                }
 
-            if (confirm && !settings_focus_right_pane) {
-                settings_focus_right_pane = true;
-                if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
-            } else if (confirm && settings_focus_right_pane) {
-                if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
-                if (settings_tab == 0 && settings_row == 0) {
-                    // Toggle Mute
-                    bgm_muted = !bgm_muted;
-                    if (bgm.stream.buffer != NULL) {
-                        SetMusicVolume(bgm, bgm_muted ? 0.0f : 0.2f);
+                int max_rows = 1;
+                if (settings_tab == 0) max_rows = 2; // Audio has 2 rows
+                if (settings_tab == 1) max_rows = 2; // Input has 2 rows (profile, test)
+
+                if (!settings_focus_right_pane) {
+                    if (move_up) {
+                        settings_tab--;
+                        if (settings_tab < 0) settings_tab = 0;
+                        settings_row = 0;
                     }
-                } else if (settings_tab == 0 && settings_row == 1) {
-                    // Cycle Audio Sink
-                    if (actual_audio_sink_count > 0) {
-                        active_audio_device = (active_audio_device + 1) % actual_audio_sink_count;
-                        char cmd[512];
-                        snprintf(cmd, sizeof(cmd), "pactl set-default-sink %s > /dev/null 2>&1 &", actual_audio_sinks[active_audio_device]);
-                        system(cmd);
+                    if (move_down) {
+                        settings_tab++;
+                        if (settings_tab > 3) settings_tab = 3;
+                        settings_row = 0;
                     }
-                } else if (settings_tab == 1 && settings_row == 0) {
-                    // Cycle Input Profile
-                    if (active_profile < 3) active_profile++;
-                    else active_profile = 0;
-                } else if (settings_tab == 1 && settings_row == 1) {
-                    // Enter Controller Test
+                } else {
+                    if (move_up) {
+                        settings_row--;
+                        if (settings_row < 0) settings_row = 0;
+                    }
+                    if (move_down) {
+                        settings_row++;
+                        if (settings_row >= max_rows) settings_row = max_rows - 1;
+                    }
+                }
+
+                if (settings_tab != prev_tab || settings_row != prev_row || settings_focus_right_pane != prev_focus) {
+                    if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
+                }
+
+                if (confirm && !settings_focus_right_pane) {
+                    settings_focus_right_pane = true;
+                    if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
+                } else if (confirm && settings_focus_right_pane) {
+                    if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
+                    if (settings_tab == 0 && settings_row == 0) {
+                        // Toggle Mute
+                        bgm_muted = !bgm_muted;
+                        if (bgm.stream.buffer != NULL) {
+                            SetMusicVolume(bgm, bgm_muted ? 0.0f : 0.2f);
+                        }
+                    } else if (settings_tab == 0 && settings_row == 1) {
+                        // Cycle Audio Sink
+                        if (actual_audio_sink_count > 0) {
+                            active_audio_device = (active_audio_device + 1) % actual_audio_sink_count;
+                            char cmd[512];
+                            snprintf(cmd, sizeof(cmd), "pactl set-default-sink %s > /dev/null 2>&1 &", actual_audio_sinks[active_audio_device]);
+                            system(cmd);
+                        }
+                    } else if (settings_tab == 1 && settings_row == 0) {
+                        show_profile_dropdown = true;
+                        dropdown_selection = (int)active_profile;
+                    } else if (settings_tab == 1 && settings_row == 1) {
+                        // Enter Controller Test
+                        pthread_mutex_lock(&update_mutex);
+                        current_state = STATE_CONTROLLER_TEST;
+                        pthread_mutex_unlock(&update_mutex);
+                    }
+                }
+
+                if (back) {
+                    if (sound_back.stream.buffer != NULL) PlaySound(sound_back);
                     pthread_mutex_lock(&update_mutex);
-                    current_state = STATE_CONTROLLER_TEST;
+                    current_state = STATE_DASHBOARD;
                     pthread_mutex_unlock(&update_mutex);
                 }
-            }
-
-            if (back) {
-                if (sound_back.stream.buffer != NULL) PlaySound(sound_back);
-                pthread_mutex_lock(&update_mutex);
-                current_state = STATE_DASHBOARD;
-                pthread_mutex_unlock(&update_mutex);
             }
         } else if (state_copy == STATE_PROFILE_SELECT) {
             bool move_left = IsKeyPressed(KEY_LEFT) || IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_LEFT);
@@ -1253,53 +1235,8 @@ int main(void) {
         } else if (state_copy == STATE_CONTROLLER_TEST) {
             bool back = IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_B);
 
-            static int active_gamepad = 0;
-            for (int i = 0; i < 4; i++) {
-                if (IsGamepadAvailable(i)) {
-                    if (fabs(GetGamepadAxisMovement(i, GAMEPAD_AXIS_LEFT_X)) > 0.25f ||
-                        fabs(GetGamepadAxisMovement(i, GAMEPAD_AXIS_LEFT_Y)) > 0.25f ||
-                        GetGamepadButtonPressed() != KEY_NULL ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_UP) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_DOWN) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_LEFT) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT) ||
-                        IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_LEFT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_FACE_UP) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_MIDDLE_RIGHT) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_LEFT_TRIGGER_1) || IsGamepadButtonPressed(i, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) {
-                        active_gamepad = i;
-                        break;
-                    } else if (!IsGamepadAvailable(active_gamepad)) {
-                        active_gamepad = i;
-                    }
-                }
-            }
-
             if (IsGamepadAvailable(active_gamepad)) {
-                ControllerProfile effective_profile = active_profile;
-                if (effective_profile == PROFILE_AUTO) {
-                    const char* gp_name_orig = GetGamepadName(active_gamepad);
-                    if (gp_name_orig != NULL) {
-                        char gp_name[256];
-                        strncpy(gp_name, gp_name_orig, 255);
-                        gp_name[255] = '\0';
-                        for (int i = 0; gp_name[i]; i++) {
-                            if (gp_name[i] >= 'A' && gp_name[i] <= 'Z') {
-                                gp_name[i] += 32;
-                            }
-                        }
-                        if (strstr(gp_name, "dualsense") != NULL || strstr(gp_name, "dualshock") != NULL || strstr(gp_name, "sony") != NULL || strstr(gp_name, "ps5") != NULL || strstr(gp_name, "ps4") != NULL || strstr(gp_name, "054c") != NULL) {
-                            effective_profile = PROFILE_PS5;
-                        } else if (strstr(gp_name, "xbox") != NULL || strstr(gp_name, "x-box") != NULL || strstr(gp_name, "microsoft") != NULL) {
-                            effective_profile = PROFILE_XBOX;
-                        } else if (strstr(gp_name, "twin") != NULL || strstr(gp_name, "adapter") != NULL || strstr(gp_name, "usb gamepad") != NULL) {
-                            effective_profile = PROFILE_PS2_LEGACY;
-                        } else {
-                            effective_profile = PROFILE_XBOX;
-                        }
-                    }
-                }
-
-                if (effective_profile == PROFILE_PS2_LEGACY) {
+                if (active_profile == PROFILE_PS2_LEGACY) {
                     if (IsGamepadButtonPressed(active_gamepad, 1)) back = true;
                 } else {
                     if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) back = true;
@@ -1543,35 +1480,7 @@ int main(void) {
 
             // Footer
             const char* legend = "(A) Select   (B) Back   (X) Notifications   (Y) Check Updates";
-            static int active_gamepad = 0;
-            // Best effort active gamepad tracking since it's just a render block
-            for (int i=0; i<4; i++) {
-                if (IsGamepadAvailable(i)) { active_gamepad = i; break; }
-            }
-            ControllerProfile effective_profile = active_profile;
-            if (effective_profile == PROFILE_AUTO) {
-                const char* gp_name_orig = GetGamepadName(active_gamepad);
-                if (gp_name_orig != NULL) {
-                    char gp_name[256];
-                    strncpy(gp_name, gp_name_orig, 255);
-                    gp_name[255] = '\0';
-                    for (int i = 0; gp_name[i]; i++) {
-                        if (gp_name[i] >= 'A' && gp_name[i] <= 'Z') {
-                            gp_name[i] += 32;
-                        }
-                    }
-                    if (strstr(gp_name, "dualsense") != NULL || strstr(gp_name, "dualshock") != NULL || strstr(gp_name, "sony") != NULL || strstr(gp_name, "ps5") != NULL || strstr(gp_name, "ps4") != NULL || strstr(gp_name, "054c") != NULL) {
-                        effective_profile = PROFILE_PS5;
-                    } else if (strstr(gp_name, "xbox") != NULL || strstr(gp_name, "x-box") != NULL || strstr(gp_name, "microsoft") != NULL) {
-                        effective_profile = PROFILE_XBOX;
-                    } else if (strstr(gp_name, "twin") != NULL || strstr(gp_name, "adapter") != NULL || strstr(gp_name, "usb gamepad") != NULL) {
-                        effective_profile = PROFILE_PS2_LEGACY;
-                    } else {
-                        effective_profile = PROFILE_XBOX;
-                    }
-                }
-            }
-            if (effective_profile == PROFILE_PS5) {
+            if (active_profile == PROFILE_PS5) {
                 legend = "(✖) Select   (⭘) Back   (◼) Notifications   (▲) Check Updates";
             }
             int legend_width = MeasureText(legend, 20);
@@ -1652,7 +1561,7 @@ int main(void) {
                 DrawText("Controller Configuration", right_x, right_y, 30, COLOR_TEXT_MAIN);
                 right_y += 60;
 
-                const char* profile_names[] = { "Auto Detect", "Modern Xbox", "PlayStation 5", "PS2 Legacy" };
+                const char* profile_names[] = { "Sony DualSense (PS5)", "Xbox / Standard", "Legacy DirectInput" };
 
                 // Profile Row
                 Color r_color = (settings_row == 0 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
@@ -1703,6 +1612,33 @@ int main(void) {
             int lw = MeasureText(legend, 20);
             DrawText(legend, (SCREEN_WIDTH - lw) / 2, SCREEN_HEIGHT - 40, 20, COLOR_TEXT_MUTED);
 
+            if (show_profile_dropdown) {
+                DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Fade(COLOR_BG, 0.8f));
+
+                float modal_w = 400;
+                float modal_h = 240;
+                float modal_x = (SCREEN_WIDTH - modal_w) / 2.0f;
+                float modal_y = (SCREEN_HEIGHT - modal_h) / 2.0f;
+
+                DrawRectangleRounded((Rectangle){modal_x, modal_y, modal_w, modal_h}, 0.15f, 32, COLOR_CARD_IDLE);
+                DrawRectangleRoundedLinesEx((Rectangle){modal_x, modal_y, modal_w, modal_h}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+
+                DrawText("Select Layout", modal_x + modal_w/2 - MeasureText("Select Layout", 24)/2, modal_y + 20, 24, COLOR_TEXT_MAIN);
+
+                const char* dropdown_names[] = { "Sony DualSense (PS5)", "Xbox / Standard", "Legacy DirectInput" };
+
+                for (int i = 0; i < 3; i++) {
+                    float opt_y = modal_y + 80 + i * 40;
+                    if (dropdown_selection == i) {
+                        DrawRectangle(modal_x + 20, opt_y - 5, modal_w - 40, 30, COLOR_CARD_FOCUS);
+                        DrawRectangle(modal_x + 20, opt_y - 5, 4, 30, COLOR_ACCENT);
+                        DrawText(dropdown_names[i], modal_x + 40, opt_y, 20, COLOR_TEXT_MAIN);
+                    } else {
+                        DrawText(dropdown_names[i], modal_x + 40, opt_y, 20, COLOR_TEXT_MUTED);
+                    }
+                }
+            }
+
         } else if (render_state == STATE_PROFILE_SELECT) {
             DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_BG);
             DrawText("Who is playing?", SCREEN_WIDTH / 2 - MeasureText("Who is playing?", 40) / 2, 200, 40, COLOR_TEXT_MAIN);
@@ -1736,10 +1672,6 @@ int main(void) {
             DrawRectangleRounded((Rectangle){cx - 400, cy - 300, 800, 600}, 0.15f, 32, COLOR_CARD_IDLE);
             DrawRectangleRoundedLinesEx((Rectangle){cx - 400, cy - 300, 800, 600}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
-            static int active_gamepad = 0;
-            for (int i=0; i<4; i++) {
-                if (IsGamepadAvailable(i)) { active_gamepad = i; break; }
-            }
             const char* gp_name_orig = IsGamepadAvailable(active_gamepad) ? GetGamepadName(active_gamepad) : "No Gamepad Detected";
             int nw = MeasureText(gp_name_orig, 24);
             DrawText(gp_name_orig, cx - nw / 2, cy - 250, 24, COLOR_TEXT_MAIN);
@@ -1749,33 +1681,10 @@ int main(void) {
             float by = cy + 50;
             float br = 20.0f;
 
-            ControllerProfile effective_profile = active_profile;
-            if (effective_profile == PROFILE_AUTO) {
-                if (gp_name_orig != NULL && strcmp(gp_name_orig, "No Gamepad Detected") != 0) {
-                    char gp_name[256];
-                    strncpy(gp_name, gp_name_orig, 255);
-                    gp_name[255] = '\0';
-                    for (int i = 0; gp_name[i]; i++) {
-                        if (gp_name[i] >= 'A' && gp_name[i] <= 'Z') {
-                            gp_name[i] += 32;
-                        }
-                    }
-                    if (strstr(gp_name, "dualsense") != NULL || strstr(gp_name, "dualshock") != NULL || strstr(gp_name, "sony") != NULL || strstr(gp_name, "ps5") != NULL || strstr(gp_name, "ps4") != NULL || strstr(gp_name, "054c") != NULL) {
-                        effective_profile = PROFILE_PS5;
-                    } else if (strstr(gp_name, "xbox") != NULL || strstr(gp_name, "x-box") != NULL || strstr(gp_name, "microsoft") != NULL) {
-                        effective_profile = PROFILE_XBOX;
-                    } else if (strstr(gp_name, "twin") != NULL || strstr(gp_name, "adapter") != NULL || strstr(gp_name, "usb gamepad") != NULL) {
-                        effective_profile = PROFILE_PS2_LEGACY;
-                    } else {
-                        effective_profile = PROFILE_XBOX;
-                    }
-                }
-            }
-
-            int btn_y = (effective_profile == PROFILE_PS2_LEGACY) ? 0 : GAMEPAD_BUTTON_RIGHT_FACE_UP;
-            int btn_x = (effective_profile == PROFILE_PS2_LEGACY) ? 3 : GAMEPAD_BUTTON_RIGHT_FACE_LEFT;
-            int btn_a = (effective_profile == PROFILE_PS2_LEGACY) ? 2 : GAMEPAD_BUTTON_RIGHT_FACE_DOWN;
-            int btn_b = (effective_profile == PROFILE_PS2_LEGACY) ? 1 : GAMEPAD_BUTTON_RIGHT_FACE_RIGHT;
+            int btn_y = (active_profile == PROFILE_PS2_LEGACY) ? 0 : GAMEPAD_BUTTON_RIGHT_FACE_UP;
+            int btn_x = (active_profile == PROFILE_PS2_LEGACY) ? 3 : GAMEPAD_BUTTON_RIGHT_FACE_LEFT;
+            int btn_a = (active_profile == PROFILE_PS2_LEGACY) ? 2 : GAMEPAD_BUTTON_RIGHT_FACE_DOWN;
+            int btn_b = (active_profile == PROFILE_PS2_LEGACY) ? 1 : GAMEPAD_BUTTON_RIGHT_FACE_RIGHT;
 
             Color c_y = IsGamepadButtonDown(active_gamepad, btn_y) ? COLOR_ACCENT : COLOR_CARD_IDLE;
             Color c_x = IsGamepadButtonDown(active_gamepad, btn_x) ? COLOR_ACCENT : COLOR_CARD_IDLE;
