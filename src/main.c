@@ -71,6 +71,8 @@ bool update_success = false;
 bool update_failed = false;
 char update_status_text[256] = "Initializing...";
 
+bool bgm_muted = false;
+
 void AddNotification(const char* msg) {
     pthread_mutex_lock(&notif_mutex);
     if (notification_count < MAX_NOTIFICATIONS) {
@@ -101,7 +103,9 @@ void* UpdateCheckerThread(void* arg) {
                     pthread_mutex_lock(&update_mutex);
                     if (!update_available) {
                         update_available = true;
+                        pthread_mutex_unlock(&update_mutex);
                         AddNotification("System Update Available");
+                        pthread_mutex_lock(&update_mutex);
                     }
                     pthread_mutex_unlock(&update_mutex);
                 }
@@ -172,16 +176,24 @@ int main(void) {
     InitAudioDevice();
 
     Sound sound_nav = {0};
-    if (FileExists("assets/sounds/nav.wav")) sound_nav = LoadSound("assets/sounds/nav.wav");
+    if (FileExists("assets/sounds/hover.ogg")) sound_nav = LoadSound("assets/sounds/hover.ogg");
+    else if (FileExists("assets/sounds/nav.wav")) sound_nav = LoadSound("assets/sounds/nav.wav");
+
     Sound sound_select = {0};
-    if (FileExists("assets/sounds/select.wav")) sound_select = LoadSound("assets/sounds/select.wav");
+    if (FileExists("assets/sounds/click.ogg")) sound_select = LoadSound("assets/sounds/click.ogg");
+    else if (FileExists("assets/sounds/select.wav")) sound_select = LoadSound("assets/sounds/select.wav");
+
     Sound sound_back = {0};
     if (FileExists("assets/sounds/back.wav")) sound_back = LoadSound("assets/sounds/back.wav");
+    else if (FileExists("assets/sounds/click.ogg")) sound_back = LoadSound("assets/sounds/click.ogg");
+
     Sound sound_notify = {0};
     if (FileExists("assets/sounds/notify.wav")) sound_notify = LoadSound("assets/sounds/notify.wav");
+    else if (FileExists("assets/sounds/click.ogg")) sound_notify = LoadSound("assets/sounds/click.ogg");
 
     Music bgm = {0};
-    if (FileExists("assets/sounds/bgm.ogg")) bgm = LoadMusicStream("assets/sounds/bgm.ogg");
+    if (FileExists("assets/sounds/background.wav")) bgm = LoadMusicStream("assets/sounds/background.wav");
+    else if (FileExists("assets/sounds/bgm.ogg")) bgm = LoadMusicStream("assets/sounds/bgm.ogg");
     else if (FileExists("assets/sounds/bgm.wav")) bgm = LoadMusicStream("assets/sounds/bgm.wav");
     if (bgm.stream.buffer != NULL) {
         SetMusicVolume(bgm, 0.2f);
@@ -297,15 +309,18 @@ int main(void) {
             bool can_navigate = !show_notifications;
 
             if (can_navigate) {
+                int prev_selection = current_selection;
                 if (move_left) {
                     current_selection--;
                     if (current_selection < 0) current_selection = 0;
-                    else if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
                 }
                 if (move_right) {
                     current_selection++;
                     if (current_selection >= MENU_ITEM_COUNT) current_selection = MENU_ITEM_COUNT - 1;
-                    else if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
+                }
+
+                if (current_selection != prev_selection) {
+                    if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
                 }
 
                 if (select) {
@@ -329,7 +344,7 @@ int main(void) {
                 pthread_mutex_unlock(&update_mutex);
 
                 if (trigger_update && has_update) {
-                    if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
+                    if (sound_notify.stream.buffer != NULL) PlaySound(sound_notify);
                     pthread_mutex_lock(&update_mutex);
                     current_state = STATE_UPDATING;
                     update_in_progress = true;
@@ -362,7 +377,11 @@ int main(void) {
             pthread_mutex_unlock(&update_mutex);
 
             if (success) {
-                if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
+                static bool success_sound_played = false;
+                if (!success_sound_played) {
+                    if (sound_notify.stream.buffer != NULL) PlaySound(sound_notify);
+                    success_sound_played = true;
+                }
                 should_close = true; // Clean exit
             }
 
@@ -382,6 +401,7 @@ int main(void) {
         } else if (state_copy == STATE_SETTINGS) {
             bool move_left = IsKeyPressed(KEY_LEFT);
             bool move_right = IsKeyPressed(KEY_RIGHT);
+            bool toggle_mute = IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER);
             bool back = IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_B);
 
             if (IsGamepadAvailable(0)) {
@@ -417,13 +437,24 @@ int main(void) {
                 }
             }
 
+            if (toggle_mute) {
+                if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
+                bgm_muted = !bgm_muted;
+                if (bgm.stream.buffer != NULL) {
+                    SetMusicVolume(bgm, bgm_muted ? 0.0f : 0.2f);
+                }
+            }
+
+            ControllerProfile prev_profile = active_profile;
             if (move_left) {
-                if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
                 if (active_profile > 0) active_profile--;
             }
             if (move_right) {
-                if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
                 if (active_profile < 3) active_profile++;
+            }
+
+            if (active_profile != prev_profile) {
+                if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
             }
 
             if (back) {
@@ -630,7 +661,15 @@ int main(void) {
 
             DrawCircle(sx + ax * 60, sy + ay * 60, 10, COLOR_ACCENT);
 
-            const char* legend = "(Cancel / Back) to return to Dashboard";
+            // Audio Toggle
+            float audio_y = cy + 180;
+            const char* audio_text = bgm_muted ? "BGM: Muted" : "BGM: Playing";
+            Color audio_color = bgm_muted ? COLOR_TEXT_MUTED : COLOR_ACCENT;
+            DrawRectangleRounded((Rectangle){ cx - 100, audio_y - 20, 200, 40 }, 0.5f, 10, bgm_muted ? COLOR_CARD_IDLE : COLOR_CARD_FOCUS);
+            int aw = MeasureText(audio_text, 20);
+            DrawText(audio_text, cx - aw / 2, audio_y - 10, 20, audio_color);
+
+            const char* legend = "(Up/Down/A) Toggle Mute   (Cancel/Back) Return";
             int lw = MeasureText(legend, 20);
             DrawText(legend, cx - lw / 2, SCREEN_HEIGHT - 40, 20, COLOR_TEXT_MUTED);
 
