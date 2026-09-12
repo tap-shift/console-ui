@@ -19,22 +19,21 @@ void DrawRectangleRoundedLinesEx(Rectangle rec, float roundness, int segments, f
 #define SCREEN_HEIGHT 1080
 
 // Palette
-static const Color COLOR_BG = { 13, 17, 23, 255 }; // #0d1117
-static const Color COLOR_CARD_IDLE = { 22, 27, 34, 180 }; // #161b22 translucent
-static const Color COLOR_CARD_FOCUS = { 33, 40, 50, 220 }; // #212832 translucent
-static const Color COLOR_ACCENT = { 0, 242, 254, 255 }; // #00f2fe
+static const Color COLOR_BG = { 11, 14, 20, 255 }; // Deep slate
+static const Color COLOR_CARD_IDLE = { 25, 30, 40, 160 }; // Frosted panel
+static const Color COLOR_CARD_FOCUS = { 35, 42, 55, 220 }; // Brighter panel
+static const Color COLOR_ACCENT = { 0, 210, 255, 255 }; // Electric cyan
 static const Color COLOR_TEXT_MAIN = { 240, 240, 240, 255 };
 static const Color COLOR_TEXT_MUTED = { 150, 150, 150, 255 };
 static const Color COLOR_TOPBAR = { 13, 17, 23, 220 };
 static const Color COLOR_ERROR = { 255, 80, 80, 255 };
 
-#define MENU_ITEM_COUNT 4
-static const char* menu_items[MENU_ITEM_COUNT] = {
-    "Library / Games",
-    "Media Deck",
-    "Terminal Tools",
-    "System & Settings"
-};
+#define MAX_MENU_ITEMS 64
+int image_count = 0;
+char* image_names[MAX_MENU_ITEMS];
+Texture2D tex_icons[MAX_MENU_ITEMS];
+float card_scales[MAX_MENU_ITEMS];
+float card_y_offsets[MAX_MENU_ITEMS];
 
 typedef enum {
     STATE_DASHBOARD,
@@ -235,27 +234,44 @@ int main(void) {
         PlayMusicStream(bgm);
     }
 
-    Texture2D tex_icons[MENU_ITEM_COUNT] = {0};
-    const char* image_paths[MENU_ITEM_COUNT] = {
-        "assets/images/games.png",
-        "assets/images/media.png",
-        "assets/images/terminal.png",
-        "assets/images/settings.png"
-    };
-    for (int i = 0; i < MENU_ITEM_COUNT; i++) {
-        if (FileExists(image_paths[i])) {
-            tex_icons[i] = LoadTexture(image_paths[i]);
+    for (int i = 0; i < MAX_MENU_ITEMS; i++) {
+        tex_icons[i] = (Texture2D){0};
+        card_scales[i] = 1.0f;
+        card_y_offsets[i] = 0.0f;
+    }
+
+    FilePathList files = LoadDirectoryFiles("assets/images");
+    for (int i = 0; i < (int)files.count && image_count < MAX_MENU_ITEMS; i++) {
+        if (IsFileExtension(files.paths[i], ".png")) {
+            tex_icons[image_count] = LoadTexture(files.paths[i]);
+            SetTextureFilter(tex_icons[image_count], TEXTURE_FILTER_BILINEAR);
+
+            const char* fname = GetFileNameWithoutExt(files.paths[i]);
+            image_names[image_count] = strdup(fname);
+            image_count++;
         }
+    }
+    UnloadDirectoryFiles(files);
+
+    // Procedural Fallback if empty
+    if (image_count == 0) {
+        image_names[0] = strdup("Library");
+        image_names[1] = strdup("Media");
+        image_names[2] = strdup("Terminal");
+        image_names[3] = strdup("Settings");
+        image_count = 4;
     }
 
     SetExitKey(KEY_NULL);
 
     int current_selection = 0;
+    int dock_selection = -1; // -1 means focus is on the shelf
     bool should_close = false;
-
-    float card_scales[MENU_ITEM_COUNT] = { 1.0f, 1.0f, 1.0f, 1.0f };
-    float card_y_offsets[MENU_ITEM_COUNT] = { 0.0f, 0.0f, 0.0f, 0.0f };
     float spinner_angle = 0.0f;
+    float camera_offset_x = 0.0f;
+    float bg_fade = 0.0f;
+    int last_selection = 0;
+    Texture2D last_bg_tex = {0};
 
     pthread_t checker_thread;
     pthread_create(&checker_thread, NULL, UpdateCheckerThread, NULL);
@@ -279,6 +295,8 @@ int main(void) {
         if (state_copy == STATE_DASHBOARD) {
             bool move_left = IsKeyPressed(KEY_LEFT);
             bool move_right = IsKeyPressed(KEY_RIGHT);
+            bool move_up = IsKeyPressed(KEY_UP);
+            bool move_down = IsKeyPressed(KEY_DOWN);
             bool select = IsKeyPressed(KEY_ENTER);
             bool back = IsKeyPressed(KEY_ESCAPE);
             bool toggle_notif = IsKeyPressed(KEY_N) || IsKeyPressed(KEY_X);
@@ -299,7 +317,9 @@ int main(void) {
                 double current_time = GetTime();
 
                 float axis_x = GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_X);
+                float axis_y = GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_Y);
                 if (fabs(axis_x) < 0.25f) axis_x = 0.0f; // Deadzone
+                if (fabs(axis_y) < 0.25f) axis_y = 0.0f;
 
                 if (effective_profile == PROFILE_PS2_LEGACY) {
                     if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || (axis_x < -0.5f && (current_time - last_nav_time > 0.3))) {
@@ -309,6 +329,14 @@ int main(void) {
                     if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || (axis_x > 0.5f && (current_time - last_nav_time > 0.3))) {
                         move_right = true;
                         if (axis_x > 0.5f) last_nav_time = current_time;
+                    }
+                    if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_UP) || (axis_y < -0.5f && (current_time - last_nav_time > 0.3))) {
+                        move_up = true;
+                        if (axis_y < -0.5f) last_nav_time = current_time;
+                    }
+                    if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || (axis_y > 0.5f && (current_time - last_nav_time > 0.3))) {
+                        move_down = true;
+                        if (axis_y > 0.5f) last_nav_time = current_time;
                     }
 
                     if (IsGamepadButtonPressed(0, 2)) select = true;
@@ -323,6 +351,14 @@ int main(void) {
                     if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || (axis_x > 0.5f && (current_time - last_nav_time > 0.3))) {
                         move_right = true;
                         if (axis_x > 0.5f) last_nav_time = current_time;
+                    }
+                    if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_UP) || (axis_y < -0.5f && (current_time - last_nav_time > 0.3))) {
+                        move_up = true;
+                        if (axis_y < -0.5f) last_nav_time = current_time;
+                    }
+                    if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || (axis_y > 0.5f && (current_time - last_nav_time > 0.3))) {
+                        move_down = true;
+                        if (axis_y > 0.5f) last_nav_time = current_time;
                     }
 
                     if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) || IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) select = true;
@@ -344,28 +380,53 @@ int main(void) {
             bool can_navigate = !show_notifications;
 
             if (can_navigate) {
-                int prev_selection = current_selection;
-                if (move_left) {
-                    current_selection--;
-                    if (current_selection < 0) current_selection = 0;
-                }
-                if (move_right) {
-                    current_selection++;
-                    if (current_selection >= MENU_ITEM_COUNT) current_selection = MENU_ITEM_COUNT - 1;
+                int prev_sel = current_selection;
+                int prev_dock = dock_selection;
+
+                if (move_down && dock_selection == -1) {
+                    dock_selection = 0; // Focus dock
+                } else if (move_up && dock_selection != -1) {
+                    dock_selection = -1; // Focus shelf
                 }
 
-                if (current_selection != prev_selection) {
+                if (dock_selection == -1) {
+                    if (move_left) {
+                        current_selection--;
+                        if (current_selection < 0) current_selection = 0;
+                    }
+                    if (move_right) {
+                        current_selection++;
+                        if (current_selection >= image_count) current_selection = image_count - 1;
+                    }
+                } else {
+                    if (move_left) {
+                        dock_selection--;
+                        if (dock_selection < 0) dock_selection = 0;
+                    }
+                    if (move_right) {
+                        dock_selection++;
+                        if (dock_selection > 3) dock_selection = 3;
+                    }
+                }
+
+                if (current_selection != prev_sel || dock_selection != prev_dock) {
                     if (sound_nav.stream.buffer != NULL) PlaySound(sound_nav);
                 }
 
                 if (select) {
                     if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
-                    if (current_selection == 3) {
-                        pthread_mutex_lock(&update_mutex);
-                        current_state = STATE_SETTINGS;
-                        pthread_mutex_unlock(&update_mutex);
+                    if (dock_selection == -1) {
+                        if (current_selection < image_count) {
+                            printf("Selected: %s\n", image_names[current_selection]);
+                        }
                     } else {
-                        printf("Selected: %s\n", menu_items[current_selection]);
+                        if (dock_selection == 1) { // Settings
+                            pthread_mutex_lock(&update_mutex);
+                            current_state = STATE_SETTINGS;
+                            pthread_mutex_unlock(&update_mutex);
+                        } else if (dock_selection == 3) { // Power
+                            should_close = true;
+                        }
                     }
                 }
 
@@ -392,8 +453,8 @@ int main(void) {
             }
 
             // Animate cards
-            for (int i = 0; i < MENU_ITEM_COUNT; i++) {
-                float target_scale = (i == current_selection) ? 1.1f : 1.0f;
+            for (int i = 0; i < image_count; i++) {
+                float target_scale = (i == current_selection) ? 1.05f : 1.0f;
                 float target_y = (i == current_selection) ? -20.0f : 0.0f;
                 card_scales[i] += (target_scale - card_scales[i]) * 15.0f * dt;
                 card_y_offsets[i] += (target_y - card_y_offsets[i]) * 15.0f * dt;
@@ -602,31 +663,64 @@ int main(void) {
         pthread_mutex_unlock(&update_mutex);
 
         if (render_state == STATE_DASHBOARD) {
+            // Dynamic Backdrop Cross-fade
+            if (current_selection != last_selection) {
+                last_bg_tex = tex_icons[last_selection];
+                last_selection = current_selection;
+                bg_fade = 0.0f;
+            }
+            if (bg_fade < 1.0f) {
+                bg_fade += 2.0f * dt;
+                if (bg_fade > 1.0f) bg_fade = 1.0f;
+            }
+
+            if (image_count > 0) {
+                if (last_bg_tex.id > 0) {
+                    float scale_x = (float)SCREEN_WIDTH / last_bg_tex.width;
+                    float scale_y = (float)SCREEN_HEIGHT / last_bg_tex.height;
+                    float scale = (scale_x > scale_y) ? scale_x : scale_y;
+                    Vector2 pos = { (SCREEN_WIDTH - last_bg_tex.width * scale) / 2.0f, (SCREEN_HEIGHT - last_bg_tex.height * scale) / 2.0f };
+                    DrawTextureEx(last_bg_tex, pos, 0.0f, scale, Fade((Color){60, 60, 70, 255}, 1.0f - bg_fade));
+                }
+                if (current_selection < image_count && tex_icons[current_selection].id > 0) {
+                    Texture2D bg_tex = tex_icons[current_selection];
+                    float scale_x = (float)SCREEN_WIDTH / bg_tex.width;
+                    float scale_y = (float)SCREEN_HEIGHT / bg_tex.height;
+                    float scale = (scale_x > scale_y) ? scale_x : scale_y;
+                    Vector2 pos = { (SCREEN_WIDTH - bg_tex.width * scale) / 2.0f, (SCREEN_HEIGHT - bg_tex.height * scale) / 2.0f };
+                    DrawTextureEx(bg_tex, pos, 0.0f, scale, Fade((Color){60, 60, 70, 255}, bg_fade));
+                }
+            }
+
             // Main Grid
             float card_base_width = 340;
             float card_base_height = 500;
             float spacing = 60;
-            float total_width = (MENU_ITEM_COUNT * card_base_width) + ((MENU_ITEM_COUNT - 1) * spacing);
-            float start_x = (SCREEN_WIDTH - total_width) / 2.0f;
             float center_y = SCREEN_HEIGHT / 2.0f + 30;
 
-            for (int i = 0; i < MENU_ITEM_COUNT; i++) {
+            // Target camera offset points to center the selected card
+            float target_camera_x = -((current_selection * (card_base_width + spacing)) + (card_base_width / 2.0f));
+            camera_offset_x += (target_camera_x - camera_offset_x) * 15.0f * dt;
+
+            // Base x is center of screen + camera offset
+            float base_x = SCREEN_WIDTH / 2.0f + camera_offset_x;
+
+            for (int i = 0; i < image_count; i++) {
                 float scale = card_scales[i];
                 float w = card_base_width * scale;
                 float h = card_base_height * scale;
-                float x = start_x + i * (card_base_width + spacing) + (card_base_width / 2.0f);
+                float x = base_x + i * (card_base_width + spacing) + (card_base_width / 2.0f);
                 float y = center_y + card_y_offsets[i];
 
                 Rectangle rect = { x - w / 2.0f, y - h / 2.0f, w, h };
 
                 if (i == current_selection) {
                     Rectangle glow_rect = { rect.x - 8, rect.y - 8, rect.width + 16, rect.height + 16 };
-                    DrawRectangleRounded(glow_rect, 0.1f, 16, Fade(COLOR_ACCENT, 0.4f));
-                    DrawRectangleRounded(rect, 0.1f, 16, COLOR_CARD_FOCUS);
-                    DrawRectangleRoundedLinesEx(rect, 0.1f, 16, 2.0f, COLOR_ACCENT); // micro-border
+                    DrawRectangleRounded(glow_rect, 0.15f, 32, Fade(COLOR_ACCENT, 0.4f));
+                    DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_FOCUS);
+                    DrawRectangleRoundedLinesEx(rect, 0.15f, 32, 2.0f, COLOR_ACCENT); // micro-border
                 } else {
-                    DrawRectangleRounded(rect, 0.1f, 16, Fade(COLOR_CARD_IDLE, 0.8f));
-                    DrawRectangleRoundedLinesEx(rect, 0.1f, 16, 1.0f, Fade(COLOR_TEXT_MUTED, 0.5f));
+                    DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_IDLE);
                 }
 
                 if (tex_icons[i].id > 0) {
@@ -642,20 +736,19 @@ int main(void) {
                     DrawTextureEx(tex_icons[i], pos, 0.0f, tex_scale, tint);
                 } else {
                     Rectangle fallback_rect = { x - 50, y - 50 - 40, 100, 100 };
-                    DrawRectangleRounded(fallback_rect, 0.2f, 8, COLOR_ACCENT);
+                    DrawRectangleRounded(fallback_rect, 0.15f, 16, COLOR_ACCENT);
                 }
 
-                int text_width = MeasureText(menu_items[i], 32);
+                int text_width = MeasureText(image_names[i], 32);
                 Color text_color = (i == current_selection) ? COLOR_TEXT_MAIN : COLOR_TEXT_MUTED;
-                DrawText(menu_items[i], x - text_width / 2, y + h / 2.0f - 60, 32, text_color);
+                DrawText(image_names[i], x - text_width / 2, y + h / 2.0f - 60, 32, text_color);
             }
 
-            // Top Bar
-            DrawRectangle(0, 0, SCREEN_WIDTH, 60, COLOR_TOPBAR);
-
+            // Top Status Bar (Spacious & Minimal)
             char host_buffer[256] = "CONSOLE-BOX";
             gethostname(host_buffer, sizeof(host_buffer));
-            DrawText(host_buffer, 40, 20, 22, COLOR_TEXT_MAIN);
+            DrawText(host_buffer, 40, 30, 24, COLOR_TEXT_MAIN);
+            DrawText("Gamepad (Active)", 40 + MeasureText(host_buffer, 24) + 20, 32, 18, COLOR_ACCENT);
 
             time_t t = time(NULL);
             struct tm tm_info;
@@ -663,36 +756,74 @@ int main(void) {
             char time_str[64];
             strftime(time_str, sizeof(time_str), "%H:%M", &tm_info);
 
-            int time_width = MeasureText(time_str, 22);
-            DrawText(time_str, SCREEN_WIDTH - time_width - 40, 20, 22, COLOR_TEXT_MAIN);
+            int right_anchor = SCREEN_WIDTH - 40;
 
-            // Audio Device Status
-            DrawText("[Audio Device]", SCREEN_WIDTH - time_width - 200, 20, 20, COLOR_ACCENT);
-
-            // Network / Status
-            DrawText("Network: UP", SCREEN_WIDTH - time_width - 350, 20, 20, COLOR_TEXT_MUTED);
-
-            // Notifications Bell
-            DrawText("Bell (X)", SCREEN_WIDTH - time_width - 460, 20, 20, COLOR_TEXT_MAIN);
-
+            // Bell
             pthread_mutex_lock(&notif_mutex);
             int unread = unread_notifications;
             pthread_mutex_unlock(&notif_mutex);
+            int bell_w = MeasureText("Bell (X)", 20);
+            right_anchor -= bell_w;
+            DrawText("Bell (X)", right_anchor, 32, 20, COLOR_TEXT_MAIN);
+            if (unread > 0) DrawCircle(right_anchor + bell_w + 10, 32 + 10, 6, COLOR_ACCENT);
+            right_anchor -= 30;
 
-            if (unread > 0) {
-                DrawCircle(SCREEN_WIDTH - time_width - 370, 20, 6, COLOR_ACCENT);
-            }
+            // Network
+            int net_w = MeasureText("Wi-Fi", 20);
+            right_anchor -= net_w;
+            DrawText("Wi-Fi", right_anchor, 32, 20, COLOR_TEXT_MUTED);
+            right_anchor -= 30;
+
+            // Audio
+            int aud_w = MeasureText("[Audio Out]", 20);
+            right_anchor -= aud_w;
+            DrawText("[Audio Out]", right_anchor, 32, 20, COLOR_ACCENT);
+            right_anchor -= 30;
+
+            // Clock
+            int time_w = MeasureText(time_str, 24);
+            right_anchor -= time_w;
+            DrawText(time_str, right_anchor, 30, 24, COLOR_TEXT_MAIN);
 
             // Update Chip
             pthread_mutex_lock(&update_mutex);
             bool has_update = update_available;
             pthread_mutex_unlock(&update_mutex);
             if (has_update) {
-                DrawRectangleRounded((Rectangle){SCREEN_WIDTH/2 - 100, 12, 200, 36}, 0.5f, 10, COLOR_ACCENT);
-                DrawText("Update Available", SCREEN_WIDTH/2 - MeasureText("Update Available", 20)/2, 20, 20, COLOR_BG);
+                DrawRectangleRounded((Rectangle){SCREEN_WIDTH/2 - 100, 20, 200, 36}, 0.5f, 16, COLOR_ACCENT);
+                DrawText("Update Available", SCREEN_WIDTH/2 - MeasureText("Update Available", 20)/2, 28, 20, COLOR_BG);
             }
 
-            // Bottom Bar
+            // Quick Action Dock
+            const char* dock_items[] = { "Library", "Settings", "Media", "Power" };
+            int dock_item_count = 4;
+            int total_dock_width = 0;
+            for (int i=0; i<dock_item_count; i++) total_dock_width += MeasureText(dock_items[i], 20) + 60; // 60 for padding + spacing
+            int dock_x = (SCREEN_WIDTH - total_dock_width) / 2;
+            int dock_y = SCREEN_HEIGHT - 120;
+            for (int i=0; i<dock_item_count; i++) {
+                int iw = MeasureText(dock_items[i], 20);
+                Rectangle dock_rect = {dock_x, dock_y, iw + 40, 50};
+
+                if (i == dock_selection) {
+                    DrawRectangleRounded(dock_rect, 0.5f, 16, COLOR_CARD_FOCUS);
+                    DrawRectangleRoundedLinesEx(dock_rect, 0.5f, 16, 2.0f, COLOR_ACCENT);
+                    DrawText(dock_items[i], dock_x + 20, dock_y + 15, 20, COLOR_TEXT_MAIN);
+                } else {
+                    DrawRectangleRounded(dock_rect, 0.5f, 16, COLOR_CARD_IDLE);
+                    DrawText(dock_items[i], dock_x + 20, dock_y + 15, 20, COLOR_TEXT_MUTED);
+                }
+                dock_x += iw + 60;
+            }
+
+            // Status Badge and Action Prompt for Main Content
+            if (image_count > 0 && current_selection < image_count) {
+                const char* status_badge = "Ready to Play";
+                int sw = MeasureText(status_badge, 22);
+                DrawText(status_badge, SCREEN_WIDTH / 2 - sw / 2, SCREEN_HEIGHT / 2 + 300, 22, COLOR_ACCENT);
+            }
+
+            // Footer
             const char* legend = "(A) Select   (B) Back   (X) Notifications   (Y) Check Updates";
             ControllerProfile effective_profile = active_profile;
             if (effective_profile == PROFILE_AUTO) {
@@ -758,11 +889,11 @@ int main(void) {
 
                 // Mute Row
                 Color r_color = (settings_row == 0 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
-                if (settings_row == 0) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, r_color);
-                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, 2.0f, COLOR_ACCENT);
+                if (settings_row == 0) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
+                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
                 DrawText("Mute Master Audio", right_x, right_y, 24, COLOR_TEXT_MAIN);
-                DrawRectangleRounded((Rectangle){right_x + max_w - 120, right_y - 5, 120, 40}, 1.0f, 16, bgm_muted ? COLOR_CARD_IDLE : COLOR_ACCENT);
+                DrawRectangleRounded((Rectangle){right_x + max_w - 120, right_y - 5, 120, 40}, 1.0f, 32, bgm_muted ? COLOR_CARD_IDLE : COLOR_ACCENT);
                 DrawText(bgm_muted ? "OFF" : "ON", right_x + max_w - 80, right_y + 5, 20, bgm_muted ? COLOR_TEXT_MUTED : COLOR_BG);
                 right_y += 80;
 
@@ -770,8 +901,8 @@ int main(void) {
                 extern int actual_audio_sink_count; // Defined later
                 extern char* actual_audio_sinks[]; // Defined later
                 r_color = (settings_row == 1 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
-                if (settings_row == 1) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, r_color);
-                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, 2.0f, COLOR_ACCENT);
+                if (settings_row == 1) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
+                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
                 DrawText("Output Device", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 const char* disp_name = (actual_audio_sink_count > 0 && active_audio_device < actual_audio_sink_count) ? actual_audio_sinks[active_audio_device] : audio_sinks[0];
@@ -786,8 +917,8 @@ int main(void) {
 
                 // Profile Row
                 Color r_color = (settings_row == 0 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
-                if (settings_row == 0) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, r_color);
-                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, 2.0f, COLOR_ACCENT);
+                if (settings_row == 0) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
+                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
                 DrawText("Active Profile", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 int pr_w = MeasureText(profile_names[(int)active_profile], 20);
                 DrawText(profile_names[(int)active_profile], right_x + max_w - pr_w - 20, right_y + 10, 20, (settings_row == 0 && settings_focus_right_pane) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
@@ -795,8 +926,8 @@ int main(void) {
 
                 // Test Row
                 r_color = (settings_row == 1 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
-                if (settings_row == 1) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, r_color);
-                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.2f, 16, 2.0f, COLOR_ACCENT);
+                if (settings_row == 1) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
+                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
                 DrawText("Test Controller Mapping", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 DrawText("START >", right_x + max_w - 100, right_y + 10, 20, (settings_row == 1 && settings_focus_right_pane) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
             }
@@ -812,8 +943,8 @@ int main(void) {
             float cx = SCREEN_WIDTH / 2.0f;
             float cy = SCREEN_HEIGHT / 2.0f;
 
-            DrawRectangle(cx - 400, cy - 300, 800, 600, COLOR_CARD_IDLE);
-            DrawRectangleRoundedLinesEx((Rectangle){cx - 400, cy - 300, 800, 600}, 0.1f, 16, 2.0f, COLOR_ACCENT);
+            DrawRectangleRounded((Rectangle){cx - 400, cy - 300, 800, 600}, 0.15f, 32, COLOR_CARD_IDLE);
+            DrawRectangleRoundedLinesEx((Rectangle){cx - 400, cy - 300, 800, 600}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
             const char* gp_name = IsGamepadAvailable(0) ? GetGamepadName(0) : "No Gamepad Detected";
             int nw = MeasureText(gp_name, 24);
@@ -859,7 +990,7 @@ int main(void) {
             float sx = cx - 200;
             float sy = cy + 50;
             Rectangle stick_box = { sx - 60, sy - 60, 120, 120 };
-            DrawRectangleRoundedLinesEx(stick_box, 0.2f, 16, 2.0f, COLOR_TEXT_MUTED);
+            DrawRectangleRoundedLinesEx(stick_box, 0.15f, 32, 2.0f, COLOR_TEXT_MUTED);
 
             float ax = GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_X);
             float ay = GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_Y);
@@ -919,10 +1050,11 @@ int main(void) {
     }
 
     // Unload textures
-    for (int i = 0; i < MENU_ITEM_COUNT; i++) {
+    for (int i = 0; i < image_count; i++) {
         if (tex_icons[i].id > 0) {
             UnloadTexture(tex_icons[i]);
         }
+        if (image_names[i]) free(image_names[i]);
     }
 
     if (sound_nav.stream.buffer != NULL) UnloadSound(sound_nav);
