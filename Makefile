@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c99
-LDFLAGS = -lraylib -lm -lpthread -ldl
+LDFLAGS = -lraylib -lm -lpthread -ldl -lcurl -lcjson
 
 TARGET = console_ui
 SRC = src/main.c

@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <curl/curl.h>
+#include <cjson/cJSON.h>
 
 #if defined(RAYLIB_VERSION_MAJOR) && (RAYLIB_VERSION_MAJOR < 5 || (RAYLIB_VERSION_MAJOR == 5 && RAYLIB_VERSION_MINOR < 5))
 // Fallback for Raylib <= 5.0 test environments
@@ -42,6 +44,30 @@ Texture2D tex_pulse = {0};
 Texture2D tex_music = {0};
 Texture2D tex_globe = {0};
 Texture2D tex_clock = {0};
+
+typedef struct {
+    char id[64];
+    char title[128];
+    char launch_path[256];
+    char cover_url[256];
+    char banner_url[256];
+    char version[32];
+    char category[64];
+    char save_subpath[128];
+} Game;
+
+#define MAX_GAMES 64
+Game games[MAX_GAMES];
+int game_count = 0;
+
+bool system_connected = false;
+long long total_bytes = 0;
+long long free_bytes = 0;
+char profile_username[128] = "";
+bool cover_download_pending = false;
+bool avatar_download_pending = false;
+
+pthread_mutex_t backend_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 typedef enum {
     STATE_DASHBOARD,
@@ -129,6 +155,230 @@ void AddNotification(const char* msg) {
     unread_notifications++;
     notify_sound_pending = true;
     pthread_mutex_unlock(&notif_mutex);
+}
+
+struct MemoryStruct {
+  char *memory;
+  size_t size;
+};
+
+static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+  size_t realsize = size * nmemb;
+  struct MemoryStruct *mem = (struct MemoryStruct *)userp;
+
+  char *ptr = realloc(mem->memory, mem->size + realsize + 1);
+  if(!ptr) return 0;
+
+  mem->memory = ptr;
+  memcpy(&(mem->memory[mem->size]), contents, realsize);
+  mem->size += realsize;
+  mem->memory[mem->size] = 0;
+
+  return realsize;
+}
+
+void* BackendWorkerThread(void* arg) {
+    (void)arg;
+    CURL *curl;
+    CURLcode res;
+
+    char base_url[128] = "http://192.168.222.181:8080";
+
+    // Test primary endpoint, fallback if needed
+    curl = curl_easy_init();
+    if(curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.222.181:8080/api/v1/system/status");
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // HEAD request
+        if (curl_easy_perform(curl) != CURLE_OK) {
+            strcpy(base_url, "http://TowerServer.local:8080");
+        }
+        curl_easy_cleanup(curl);
+    }
+
+    // One-time fetch for games manifest
+    curl = curl_easy_init();
+    if (curl) {
+        struct MemoryStruct chunk;
+        chunk.memory = malloc(1);
+        chunk.size = 0;
+
+        char url[256];
+        snprintf(url, sizeof(url), "%s/api/v1/games", base_url);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+
+        res = curl_easy_perform(curl);
+        if (res == CURLE_OK) {
+            long response_code;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+            if (response_code == 200) {
+                cJSON *json = cJSON_Parse(chunk.memory);
+                if (json != NULL && cJSON_IsArray(json)) {
+                    int num_games = cJSON_GetArraySize(json);
+                    if (num_games > MAX_GAMES) num_games = MAX_GAMES;
+
+                    pthread_mutex_lock(&backend_mutex);
+                    game_count = num_games;
+
+                    for (int i = 0; i < num_games; i++) {
+                        cJSON *item = cJSON_GetArrayItem(json, i);
+                        cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "id");
+                        cJSON *title = cJSON_GetObjectItemCaseSensitive(item, "title");
+                        cJSON *launch_path = cJSON_GetObjectItemCaseSensitive(item, "launch_path");
+                        cJSON *cover_url = cJSON_GetObjectItemCaseSensitive(item, "cover_url");
+
+                        if (cJSON_IsString(id)) strncpy(games[i].id, id->valuestring, sizeof(games[i].id) - 1);
+                        if (cJSON_IsString(title)) strncpy(games[i].title, title->valuestring, sizeof(games[i].title) - 1);
+                        if (cJSON_IsString(launch_path)) strncpy(games[i].launch_path, launch_path->valuestring, sizeof(games[i].launch_path) - 1);
+                        if (cJSON_IsString(cover_url)) {
+                            strncpy(games[i].cover_url, cover_url->valuestring, sizeof(games[i].cover_url) - 1);
+
+                            // Download cover art
+                            char cover_full_url[512];
+                            snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", base_url, cover_url->valuestring);
+
+                            char local_path[512];
+                            system("mkdir -p /tmp/cache/covers");
+                            snprintf(local_path, sizeof(local_path), "/tmp/cache/covers/%s.png", games[i].id);
+
+                            FILE *fp = fopen(local_path, "wb");
+                            if (fp) {
+                                CURL *curl_dl = curl_easy_init();
+                                if (curl_dl) {
+                                    curl_easy_setopt(curl_dl, CURLOPT_URL, cover_full_url);
+                                    curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
+                                    curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
+                                    curl_easy_perform(curl_dl);
+                                    curl_easy_cleanup(curl_dl);
+                                }
+                                fclose(fp);
+                            }
+                        }
+                    }
+                    cover_download_pending = true;
+                    pthread_mutex_unlock(&backend_mutex);
+
+                    cJSON_Delete(json);
+                }
+            }
+        }
+        free(chunk.memory);
+        curl_easy_cleanup(curl);
+    }
+
+    // One-time fetch for auth profile
+    curl = curl_easy_init();
+    if(curl) {
+        struct MemoryStruct chunk;
+        chunk.memory = malloc(1);
+        chunk.size = 0;
+
+        char url[256];
+        snprintf(url, sizeof(url), "%s/api/v1/auth/profile", base_url);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+
+        res = curl_easy_perform(curl);
+        if(res == CURLE_OK) {
+            long response_code;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+            if (response_code == 200) {
+                cJSON *json = cJSON_Parse(chunk.memory);
+                if (json != NULL) {
+                    cJSON *uname = cJSON_GetObjectItemCaseSensitive(json, "username");
+                    if (cJSON_IsString(uname) && (uname->valuestring != NULL)) {
+                        pthread_mutex_lock(&backend_mutex);
+                        strncpy(profile_username, uname->valuestring, 127);
+                        profile_username[127] = '\0';
+                        pthread_mutex_unlock(&backend_mutex);
+                    }
+
+                    cJSON *avatar = cJSON_GetObjectItemCaseSensitive(json, "avatar_url");
+                    if (cJSON_IsString(avatar) && (avatar->valuestring != NULL) && strlen(avatar->valuestring) > 0) {
+                        char avatar_url[512];
+                        snprintf(avatar_url, sizeof(avatar_url), "%s%s", base_url, avatar->valuestring);
+
+                        system("mkdir -p /tmp/cache");
+                        FILE *fp = fopen("/tmp/cache/avatar.png", "wb");
+                        if (fp) {
+                            CURL *curl_dl = curl_easy_init();
+                            if (curl_dl) {
+                                curl_easy_setopt(curl_dl, CURLOPT_URL, avatar_url);
+                                curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
+                                curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
+                                curl_easy_perform(curl_dl);
+                                curl_easy_cleanup(curl_dl);
+                            }
+                            fclose(fp);
+                            pthread_mutex_lock(&backend_mutex);
+                            avatar_download_pending = true;
+                            pthread_mutex_unlock(&backend_mutex);
+                        }
+                    }
+                    cJSON_Delete(json);
+                }
+            }
+        }
+        free(chunk.memory);
+        curl_easy_cleanup(curl);
+    }
+
+    while(1) {
+        curl = curl_easy_init();
+        if(curl) {
+            struct MemoryStruct chunk;
+            chunk.memory = malloc(1);
+            chunk.size = 0;
+
+            char url[256];
+            snprintf(url, sizeof(url), "%s/api/v1/system/status", base_url);
+            curl_easy_setopt(curl, CURLOPT_URL, url);
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+            curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
+
+            res = curl_easy_perform(curl);
+
+            bool connected = false;
+            long long tb = 0, fb = 0;
+
+            if(res == CURLE_OK) {
+                long response_code;
+                curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+                if (response_code == 200) {
+                    cJSON *json = cJSON_Parse(chunk.memory);
+                    if (json != NULL) {
+                        connected = true;
+                        cJSON *total = cJSON_GetObjectItemCaseSensitive(json, "total_bytes");
+                        cJSON *free_b = cJSON_GetObjectItemCaseSensitive(json, "free_bytes");
+                        if (cJSON_IsNumber(total) && cJSON_IsNumber(free_b)) {
+                            tb = (long long)total->valuedouble;
+                            fb = (long long)free_b->valuedouble;
+                        }
+                        cJSON_Delete(json);
+                    }
+                }
+            }
+
+            pthread_mutex_lock(&backend_mutex);
+            system_connected = connected;
+            if (connected) {
+                total_bytes = tb;
+                free_bytes = fb;
+            }
+            pthread_mutex_unlock(&backend_mutex);
+
+            free(chunk.memory);
+            curl_easy_cleanup(curl);
+        }
+        sleep(5);
+    }
+    return NULL;
 }
 
 void* UpdateCheckerThread(void* arg) {
@@ -284,6 +534,9 @@ int main(void) {
     pthread_t checker_thread;
     pthread_create(&checker_thread, NULL, UpdateCheckerThread, NULL);
 
+    pthread_t backend_thread;
+    pthread_create(&backend_thread, NULL, BackendWorkerThread, NULL);
+
     while (!WindowShouldClose() && !should_close) {
         if (bgm.stream.buffer != NULL) UpdateMusicStream(bgm);
 
@@ -295,6 +548,37 @@ int main(void) {
             notify_sound_pending = false;
         }
         pthread_mutex_unlock(&notif_mutex);
+
+        pthread_mutex_lock(&backend_mutex);
+        if (cover_download_pending) {
+            if (game_count > 0) {
+                for (int i = 0; i < game_count; i++) {
+                    char local_path[512];
+                    snprintf(local_path, sizeof(local_path), "/tmp/cache/covers/%s.png", games[i].id);
+                    if (FileExists(local_path)) {
+                        if (tex_icons[i].id > 0) UnloadTexture(tex_icons[i]);
+                        tex_icons[i] = LoadTexture(local_path);
+                        SetTextureFilter(tex_icons[i], TEXTURE_FILTER_BILINEAR);
+                    } else if (tex_icons[0].id > 0) {
+                        tex_icons[i] = tex_icons[0]; // fallback to question mark
+                    }
+                    if (image_names[i]) free(image_names[i]);
+                    image_names[i] = strdup(games[i].title);
+                }
+                image_count = game_count;
+            }
+            cover_download_pending = false;
+        }
+
+        if (avatar_download_pending) {
+            if (FileExists("/tmp/cache/avatar.png")) {
+                if (tex_user.id > 0) UnloadTexture(tex_user);
+                tex_user = LoadTexture("/tmp/cache/avatar.png");
+                SetTextureFilter(tex_user, TEXTURE_FILTER_BILINEAR);
+            }
+            avatar_download_pending = false;
+        }
+        pthread_mutex_unlock(&backend_mutex);
 
         pthread_mutex_lock(&update_mutex);
         AppUIState state_copy = current_state;
@@ -474,7 +758,22 @@ int main(void) {
                     if (sound_select.stream.buffer != NULL) PlaySound(sound_select);
                     if (dock_selection == -1 && topbar_selection == -1) {
                         if (current_selection < image_count) {
-                            printf("Selected: %s\n", image_names[current_selection]);
+                            pthread_mutex_lock(&backend_mutex);
+                            char exec_path[512];
+                            if (current_selection < game_count) {
+                                snprintf(exec_path, sizeof(exec_path), "%s", games[current_selection].launch_path);
+                            } else {
+                                exec_path[0] = '\0';
+                            }
+                            pthread_mutex_unlock(&backend_mutex);
+
+                            if (strlen(exec_path) > 0) {
+                                char cmd[1024];
+                                snprintf(cmd, sizeof(cmd), "/bin/sh -c \"%s\" &", exec_path);
+                                system(cmd);
+                            } else {
+                                printf("Selected fallback: %s\n", image_names[current_selection]);
+                            }
                         }
                     } else if (dock_selection != -1) {
                         if (dock_selection == 1) { // Settings
@@ -912,9 +1211,20 @@ int main(void) {
                 DrawRectangleRounded(profile_rect, 0.15f, 16, COLOR_CARD_FOCUS);
                 DrawRectangleRoundedLinesEx(profile_rect, 0.15f, 16, 2.0f, COLOR_ACCENT);
             }
+            pthread_mutex_lock(&backend_mutex);
+            char username_disp[128];
+            if (strlen(profile_username) > 0) {
+                strncpy(username_disp, profile_username, 127);
+                username_disp[127] = '\0';
+            } else {
+                strcpy(username_disp, "Justin");
+            }
+            pthread_mutex_unlock(&backend_mutex);
+
             if (tex_user.id > 0) {
                 DrawTextureEx(tex_user, (Vector2){ profile_rect.x + 8, profile_rect.y + 8 }, 0.0f, 24.0f / tex_user.width, WHITE);
             } else {
+                DrawText(username_disp, profile_rect.x - MeasureText(username_disp, 20) - 10, profile_rect.y + 10, 20, COLOR_TEXT_MAIN);
                 DrawText("P", profile_rect.x + 12, profile_rect.y + 10, 20, COLOR_TEXT_MAIN);
             }
 
@@ -933,6 +1243,19 @@ int main(void) {
 
             // Network
             right_anchor -= 30;
+
+            pthread_mutex_lock(&backend_mutex);
+            bool is_connected = system_connected;
+            pthread_mutex_unlock(&backend_mutex);
+
+            if (is_connected) {
+                float pulse = (sin(GetTime() * 4.0f) + 1.0f) / 2.0f;
+                DrawCircle(right_anchor + 30, 32, 4 + pulse * 2, Fade(GREEN, pulse));
+                DrawCircle(right_anchor + 30, 32, 4, GREEN);
+            } else {
+                DrawCircle(right_anchor + 30, 32, 4, COLOR_ERROR);
+            }
+
             if (tex_globe.id > 0) {
                 DrawTextureEx(tex_globe, (Vector2){ right_anchor, 28 }, 0.0f, 24.0f / tex_globe.width, COLOR_TEXT_MUTED);
             } else {
@@ -1120,6 +1443,22 @@ int main(void) {
                 if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
                 DrawText("Test Controller Mapping", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 DrawText("START >", right_x + max_w - 100, right_y + 10, 20, (settings_row == 1 && settings_focus_right_pane) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
+            } else if (settings_tab == 2) { // System
+                DrawText("System & Storage", right_x, right_y, 30, COLOR_TEXT_MAIN);
+                right_y += 60;
+
+                pthread_mutex_lock(&backend_mutex);
+                long long tb = total_bytes;
+                long long fb = free_bytes;
+                pthread_mutex_unlock(&backend_mutex);
+
+                double tb_gb = (double)tb / (1024.0 * 1024.0 * 1024.0);
+                double fb_gb = (double)fb / (1024.0 * 1024.0 * 1024.0);
+
+                char storage_text[256];
+                snprintf(storage_text, sizeof(storage_text), "Total Storage: %.2f GB\nFree Storage: %.2f GB", tb_gb, fb_gb);
+
+                DrawText(storage_text, right_x, right_y, 24, COLOR_TEXT_MAIN);
             }
 
             const char* legend = "(Up/Down) Select Item   (Left/Right) Change Tab / Option   (A) Confirm   (B) Back";
