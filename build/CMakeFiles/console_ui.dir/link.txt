@@ -1,1 +1,0 @@
-/usr/bin/cc  -Wall -Wextra -O3 -DNDEBUG CMakeFiles/console_ui.dir/src/main.c.o -o console_ui  -lraylib -lm -lpthread -ldl -lcurl -lcjson
