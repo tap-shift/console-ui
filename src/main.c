@@ -88,6 +88,10 @@ typedef struct {
     bool cover_failed;
 } Game;
 
+typedef struct {
+    char game_id[64];
+} SaveSyncData;
+
 #define MAX_GAMES 64
 Game games[MAX_GAMES];
 int game_count = 0;
@@ -106,7 +110,8 @@ typedef enum {
     STATE_UPDATING,
     STATE_SETTINGS,
     STATE_CONTROLLER_TEST,
-    STATE_PROFILE_SELECT
+    STATE_PROFILE_SELECT,
+    STATE_INGAME
 } AppUIState;
 
 AppUIState current_state = STATE_DASHBOARD;
@@ -191,6 +196,10 @@ char update_status_text[256] = "Initializing...";
 bool bgm_muted = false;
 
 bool game_running = false;
+bool game_paused = false;
+pid_t active_game_pid = -1;
+char active_game_id[64] = "";
+int overlay_selection_global = 0;
 
 void LoadSettings() {
     char config_dir[256];
@@ -283,14 +292,12 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 }
 
 
-void* GameLaunchThread(void* arg) {
-    Game* game = (Game*)arg;
-
-    if (access(game->launch_path, X_OK) != 0) {
-        AddNotification("Game not found or not executable");
-        game_running = false;
-        return NULL;
-    }
+void* SaveSyncThread(void* arg) {
+    SaveSyncData* data = (SaveSyncData*)arg;
+    char game_id[64];
+    strncpy(game_id, data->game_id, sizeof(game_id)-1);
+    game_id[63] = '\0';
+    free(data);
 
     char save_dir[512];
     char cache_dir[256];
@@ -302,29 +309,14 @@ void* GameLaunchThread(void* arg) {
     u_id[63] = '\0';
     pthread_mutex_unlock(&backend_mutex);
 
-    snprintf(save_dir, sizeof(save_dir), "%s/saves/%s/%s", cache_dir, u_id, game->id);
+    snprintf(save_dir, sizeof(save_dir), "%s/saves/%s/%s", cache_dir, u_id, game_id);
 
     char cmd[512];
-
-    setenv("XDG_DATA_HOME", save_dir, 1);
-
-    // Blocking execution
-    fprintf(stderr, "Launching: %s\n", game->launch_path);
-    game_running = true;
-    pid_t pid = fork();
-    if (pid == 0) {
-        execl("/bin/sh", "sh", "-c", game->launch_path, (char *)NULL);
-        exit(1);
-    } else if (pid > 0) {
-        int status;
-        waitpid(pid, &status, 0);
-    }
-    game_running = false;
 
     if (access(save_dir, F_OK) == 0) {
         // Tar the save dir
         char tar_path[512];
-        snprintf(tar_path, sizeof(tar_path), "/tmp/save_%s.tar.gz", game->id);
+        snprintf(tar_path, sizeof(tar_path), "/tmp/save_%s.tar.gz", game_id);
         snprintf(cmd, sizeof(cmd), "tar -czf \"%s\" -C \"%s\" .", tar_path, save_dir);
         int ret = system(cmd);
         (void)ret;
@@ -338,7 +330,7 @@ void* GameLaunchThread(void* arg) {
 
             field = curl_mime_addpart(form);
             curl_mime_name(field, "game_id");
-            curl_mime_data(field, game->id, CURL_ZERO_TERMINATED);
+            curl_mime_data(field, game_id, CURL_ZERO_TERMINATED);
 
             field = curl_mime_addpart(form);
             curl_mime_name(field, "user_id");
@@ -818,16 +810,41 @@ int main(void) {
     static int active_gamepad = 0;
 
     while (!WindowShouldClose() && !should_close) {
+        if (active_game_pid > 0) {
+            int status;
+            pid_t p = waitpid(active_game_pid, &status, WNOHANG);
+            if (p > 0) {
+                // Game terminated
+                active_game_pid = -1;
+                game_running = false;
+                game_paused = false;
+
+                SaveSyncData* sync_data = malloc(sizeof(SaveSyncData));
+                if (sync_data) {
+                    strncpy(sync_data->game_id, active_game_id, sizeof(sync_data->game_id)-1);
+                    sync_data->game_id[63] = '\0';
+                    pthread_t sync_thread;
+                    pthread_create(&sync_thread, NULL, SaveSyncThread, sync_data);
+                    pthread_detach(sync_thread);
+                }
+
+                pthread_mutex_lock(&update_mutex);
+                current_state = STATE_DASHBOARD;
+                pthread_mutex_unlock(&update_mutex);
+            }
+        }
+
         if (bgm.stream.buffer != NULL) UpdateMusicStream(bgm);
 
         float dt = GetFrameTime();
 
         static bool was_running = false;
-        if (game_running && !was_running) {
+        bool should_hide = game_running && !game_paused;
+        if (should_hide && !was_running) {
             MinimizeWindow();
             was_running = true;
         }
-        if (!game_running && was_running) {
+        if (!should_hide && was_running) {
             RestoreWindow();
             was_running = false;
         }
@@ -1071,9 +1088,45 @@ int main(void) {
                             pthread_mutex_unlock(&backend_mutex);
 
                             if (strlen(exec_path) > 0) {
-                                pthread_t launch_thread;
-                                pthread_create(&launch_thread, NULL, GameLaunchThread, &games[current_selection]);
-                                pthread_detach(launch_thread);
+                                if (access(exec_path, X_OK) != 0) {
+                                    AddNotification("Game not found or not executable");
+                                } else {
+                                    char save_dir[512];
+                                    char cache_dir[256];
+                                    GetDataDir(cache_dir, sizeof(cache_dir));
+
+                                    pthread_mutex_lock(&backend_mutex);
+                                    char u_id[64];
+                                    strncpy(u_id, active_user_id, sizeof(u_id)-1);
+                                    u_id[63] = '\0';
+                                    pthread_mutex_unlock(&backend_mutex);
+
+                                    snprintf(save_dir, sizeof(save_dir), "%s/saves/%s/%s", cache_dir, u_id, games[current_selection].id);
+
+                                    fprintf(stderr, "Launching: %s\n", exec_path);
+                                    game_running = true;
+                                    game_paused = false;
+                                    strncpy(active_game_id, games[current_selection].id, sizeof(active_game_id)-1);
+                                    active_game_id[63] = '\0';
+
+                                    pthread_mutex_lock(&update_mutex);
+                                    current_state = STATE_INGAME;
+                                    pthread_mutex_unlock(&update_mutex);
+
+                                    pid_t pid = fork();
+                                    if (pid == 0) {
+                                        setenv("XDG_DATA_HOME", save_dir, 1);
+                                        execl("/bin/sh", "sh", "-c", exec_path, (char *)NULL);
+                                        exit(1);
+                                    } else if (pid > 0) {
+                                        active_game_pid = pid;
+                                    } else {
+                                        game_running = false;
+                                        pthread_mutex_lock(&update_mutex);
+                                        current_state = STATE_DASHBOARD;
+                                        pthread_mutex_unlock(&update_mutex);
+                                    }
+                                }
                             } else {
                                 printf("Selected fallback: %s\n", image_names[current_selection]);
                             }
@@ -1350,6 +1403,72 @@ int main(void) {
                 pthread_mutex_lock(&update_mutex);
                 current_state = STATE_SETTINGS;
                 pthread_mutex_unlock(&update_mutex);
+            }
+        } else if (state_copy == STATE_INGAME) {
+            if (!game_paused) {
+                bool pause_req = false;
+                if (IsGamepadAvailable(active_gamepad)) {
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_MIDDLE)) pause_req = true;
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1) &&
+                        IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1) &&
+                        IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT)) pause_req = true;
+                }
+                if (pause_req && active_game_pid > 0) {
+                    kill(active_game_pid, SIGSTOP);
+                    game_paused = true;
+                    overlay_selection_global = 0;
+                }
+            } else {
+                bool move_up = false;
+                bool move_down = false;
+                bool select = false;
+
+                if (IsGamepadAvailable(active_gamepad)) {
+                    static double last_nav_time = 0;
+                    double current_time = GetTime();
+                    float axis_y = GetGamepadAxisMovement(active_gamepad, GAMEPAD_AXIS_LEFT_Y);
+                    if (fabs(axis_y) < 0.25f) axis_y = 0.0f;
+
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP) || (axis_y < -0.25f && (current_time - last_nav_time > 0.3))) { move_up = true; last_nav_time = current_time; }
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || (axis_y > 0.25f && (current_time - last_nav_time > 0.3))) { move_down = true; last_nav_time = current_time; }
+
+                    if (IsGamepadButtonPressed(active_gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) select = true;
+                    if (active_profile == PROFILE_PS2_LEGACY && IsGamepadButtonPressed(active_gamepad, 2)) select = true;
+                }
+
+                if (move_up) overlay_selection_global = 0;
+                if (move_down) overlay_selection_global = 1;
+
+                if (select) {
+                    if (overlay_selection_global == 0) {
+                        // Resume
+                        if (active_game_pid > 0) kill(active_game_pid, SIGCONT);
+                        game_paused = false;
+                    } else if (overlay_selection_global == 1) {
+                        // Exit Game
+                        if (active_game_pid > 0) {
+                            kill(active_game_pid, SIGTERM);
+                            int status;
+                            waitpid(active_game_pid, &status, 0);
+                            active_game_pid = -1;
+                        }
+                        game_running = false;
+                        game_paused = false;
+
+                        SaveSyncData* sync_data = malloc(sizeof(SaveSyncData));
+                        if (sync_data) {
+                            strncpy(sync_data->game_id, active_game_id, sizeof(sync_data->game_id)-1);
+                            sync_data->game_id[63] = '\0';
+                            pthread_t sync_thread;
+                            pthread_create(&sync_thread, NULL, SaveSyncThread, sync_data);
+                            pthread_detach(sync_thread);
+                        }
+
+                        pthread_mutex_lock(&update_mutex);
+                        current_state = STATE_DASHBOARD;
+                        pthread_mutex_unlock(&update_mutex);
+                    }
+                }
             }
         }
 
@@ -1861,6 +1980,41 @@ int main(void) {
                 const char* back_msg = "Press (B) or ESC to return to Dashboard";
                 int bw = MeasureText(back_msg, 20);
                 DrawText(back_msg, SCREEN_WIDTH / 2 - bw / 2, SCREEN_HEIGHT / 2 + 80, 20, COLOR_TEXT_MAIN);
+            }
+        } else if (render_state == STATE_INGAME) {
+            if (game_paused) {
+                // Dimmed background
+                DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, (Color){ 0, 0, 0, 200 });
+
+                // Quick-Access Overlay
+                float panel_w = 400;
+                float panel_h = 300;
+                float px = SCREEN_WIDTH / 2.0f - panel_w / 2.0f;
+                float py = SCREEN_HEIGHT / 2.0f - panel_h / 2.0f;
+
+                DrawRectangleRounded((Rectangle){ px, py, panel_w, panel_h }, 0.15f, 16, COLOR_CARD_IDLE);
+                DrawRectangleRoundedLinesEx((Rectangle){ px, py, panel_w, panel_h }, 0.15f, 16, 2.0f, COLOR_TEXT_MUTED);
+
+                const char* title = "Game Paused";
+                int tw = MeasureText(title, 32);
+                DrawText(title, px + panel_w/2 - tw/2, py + 30, 32, COLOR_TEXT_MAIN);
+
+                const char* opt1 = "Resume";
+                const char* opt2 = "Exit Game";
+                int o1w = MeasureText(opt1, 24);
+                int o2w = MeasureText(opt2, 24);
+
+                Color c1 = (overlay_selection_global == 0) ? COLOR_ACCENT : COLOR_TEXT_MUTED;
+                Color c2 = (overlay_selection_global == 1) ? COLOR_ACCENT : COLOR_TEXT_MUTED;
+
+                DrawText(opt1, px + panel_w/2 - o1w/2, py + 120, 24, c1);
+                DrawText(opt2, px + panel_w/2 - o2w/2, py + 180, 24, c2);
+
+                if (overlay_selection_global == 0) {
+                    DrawRectangleLines(px + panel_w/2 - o1w/2 - 10, py + 115, o1w + 20, 34, COLOR_ACCENT);
+                } else if (overlay_selection_global == 1) {
+                    DrawRectangleLines(px + panel_w/2 - o2w/2 - 10, py + 175, o2w + 20, 34, COLOR_ACCENT);
+                }
             }
         }
 
