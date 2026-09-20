@@ -1594,7 +1594,8 @@ int main(void) {
             }
             pthread_mutex_lock(&backend_mutex);
             char username_disp[128];
-            strcpy(username_disp, "Profile");
+            strncpy(username_disp, "Profile", sizeof(username_disp) - 1);
+            username_disp[sizeof(username_disp) - 1] = '\0';
             for (int i=0; i<user_count; i++) {
                 if (strcmp(users[i].id, active_user_id) == 0) {
                     strncpy(username_disp, users[i].username, 127);
