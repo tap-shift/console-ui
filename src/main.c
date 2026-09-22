@@ -1713,10 +1713,14 @@ int main(void) {
                 DrawText("Notifications", notif_drawer_x + 20, 80, 24, COLOR_ACCENT);
 
                 pthread_mutex_lock(&notif_mutex);
-                for (int i = 0; i < notification_count; i++) {
-                    int idx = notification_count - 1 - i; // reverse order
-                    if (i > 10) break;
-                    DrawText(notifications[idx], notif_drawer_x + 20, 130 + i * 40, 20, COLOR_TEXT_MAIN);
+                if (notification_count == 0) {
+                    DrawText("You're all caught up!", notif_drawer_x + 20, 130, 20, COLOR_TEXT_MUTED);
+                } else {
+                    for (int i = 0; i < notification_count; i++) {
+                        int idx = notification_count - 1 - i; // reverse order
+                        if (i > 10) break;
+                        DrawText(notifications[idx], notif_drawer_x + 20, 130 + i * 40, 20, COLOR_TEXT_MAIN);
+                    }
                 }
                 pthread_mutex_unlock(&notif_mutex);
             }
