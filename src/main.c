@@ -63,6 +63,7 @@ static const Color COLOR_ERROR = { 255, 80, 80, 255 };
 #define MAX_MENU_ITEMS 64
 int image_count = 0;
 char* image_names[MAX_MENU_ITEMS];
+int image_name_widths[MAX_MENU_ITEMS] = {0};
 Texture2D tex_icons[MAX_MENU_ITEMS];
 float card_scales[MAX_MENU_ITEMS];
 float card_y_offsets[MAX_MENU_ITEMS];
@@ -778,12 +779,14 @@ int main(void) {
         tex_icons[0] = LoadTexture("assets/images/question-square.png");
         SetTextureFilter(tex_icons[0], TEXTURE_FILTER_BILINEAR);
         image_names[0] = strdup("Library");
+        image_name_widths[0] = MeasureText(image_names[0], 32);
         image_count = 1;
     }
 
     // Procedural Fallback if empty
     if (image_count == 0) {
         image_names[0] = strdup("Library");
+        image_name_widths[0] = MeasureText(image_names[0], 32);
         image_count = 1;
     }
 
@@ -917,6 +920,7 @@ int main(void) {
                     }
                     if (image_names[i]) free(image_names[i]);
                     image_names[i] = strdup(local_games[i].title);
+                    image_name_widths[i] = MeasureText(image_names[i], 32);
                 }
                 image_count = local_game_count;
             }
@@ -1556,7 +1560,7 @@ int main(void) {
                     DrawRectangleRounded(fallback_rect, 0.15f, 16, COLOR_ACCENT);
                 }
 
-                int text_width = MeasureText(image_names[i], 32);
+                int text_width = image_name_widths[i];
                 Color text_color = (i == current_selection) ? COLOR_TEXT_MAIN : COLOR_TEXT_MUTED;
                 DrawText(image_names[i], x - text_width / 2, y + h / 2.0f - 60, 32, text_color);
             }
