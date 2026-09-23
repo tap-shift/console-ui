@@ -179,7 +179,11 @@ bool update_available = false;
 pthread_mutex_t update_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define MAX_NOTIFICATIONS 32
-char notifications[MAX_NOTIFICATIONS][128];
+typedef struct {
+    char message[128];
+    int width;
+} Notification;
+Notification notifications[MAX_NOTIFICATIONS];
 int notification_count = 0;
 int unread_notifications = 0;
 pthread_mutex_t notif_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -256,15 +260,17 @@ void SaveSettings() {
 void AddNotification(const char* msg) {
     pthread_mutex_lock(&notif_mutex);
     if (notification_count < MAX_NOTIFICATIONS) {
-        strncpy(notifications[notification_count], msg, 127);
-        notifications[notification_count][127] = '\0';
+        strncpy(notifications[notification_count].message, msg, 127);
+        notifications[notification_count].message[127] = '\0';
+        notifications[notification_count].width = MeasureText(notifications[notification_count].message, 20);
         notification_count++;
     } else {
         for (int i = 1; i < MAX_NOTIFICATIONS; i++) {
-            strcpy(notifications[i-1], notifications[i]);
+            memcpy(&notifications[i-1], &notifications[i], sizeof(Notification));
         }
-        strncpy(notifications[MAX_NOTIFICATIONS-1], msg, 127);
-        notifications[MAX_NOTIFICATIONS-1][127] = '\0';
+        strncpy(notifications[MAX_NOTIFICATIONS-1].message, msg, 127);
+        notifications[MAX_NOTIFICATIONS-1].message[127] = '\0';
+        notifications[MAX_NOTIFICATIONS-1].width = MeasureText(notifications[MAX_NOTIFICATIONS-1].message, 20);
     }
     unread_notifications++;
     notify_sound_pending = true;
@@ -1729,7 +1735,14 @@ int main(void) {
                 for (int i = 0; i < notification_count; i++) {
                     int idx = notification_count - 1 - i; // reverse order
                     if (i > 10) break;
-                    DrawText(notifications[idx], notif_drawer_x + 20, 130 + i * 40, 20, COLOR_TEXT_MAIN);
+
+                    float y_offset = 130 + i * 50; // increased spacing for pills
+                    int nw = notifications[idx].width;
+                    Rectangle n_rect = { notif_drawer_x + 20, y_offset, (float)nw + 40, 40 };
+
+                    DrawRectangleRounded(n_rect, 0.5f, 16, COLOR_CARD_FOCUS);
+                    DrawRectangleRoundedLinesEx(n_rect, 0.5f, 16, 2.0f, COLOR_ACCENT);
+                    DrawText(notifications[idx].message, notif_drawer_x + 40, y_offset + 10, 20, COLOR_TEXT_MAIN);
                 }
                 pthread_mutex_unlock(&notif_mutex);
             }
