@@ -31,12 +31,42 @@ void GetDataDir(char* out_path, size_t max_len) {
     else snprintf(out_path, max_len, "/tmp/share/console-ui");
 }
 
+void mkdir_p(const char *dir) {
+    char tmp[512];
+    char *p = NULL;
+    size_t len;
+
+    snprintf(tmp, sizeof(tmp), "%s", dir);
+    len = strlen(tmp);
+    if(len == 0) return;
+    if(tmp[len - 1] == '/') tmp[len - 1] = 0;
+
+    for(p = tmp + 1; *p; p++) {
+        if(*p == '/') {
+            *p = 0;
+            mkdir(tmp, 0755);
+            *p = '/';
+        }
+    }
+    mkdir(tmp, 0755);
+}
+
 void MakeDirs() {
-    char cmd[512];
     char p[256];
-    GetConfigDir(p, sizeof(p)); snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", p); int ret = system(cmd); (void)ret;
-    GetCacheDir(p, sizeof(p)); snprintf(cmd, sizeof(cmd), "mkdir -p \"%s/covers\" \"%s/avatars\"", p, p); ret = system(cmd); (void)ret;
-    GetDataDir(p, sizeof(p)); snprintf(cmd, sizeof(cmd), "mkdir -p \"%s/saves\"", p); ret = system(cmd); (void)ret;
+    char sub[512];
+
+    GetConfigDir(p, sizeof(p));
+    mkdir_p(p);
+
+    GetCacheDir(p, sizeof(p));
+    snprintf(sub, sizeof(sub), "%s/covers", p);
+    mkdir_p(sub);
+    snprintf(sub, sizeof(sub), "%s/avatars", p);
+    mkdir_p(sub);
+
+    GetDataDir(p, sizeof(p));
+    snprintf(sub, sizeof(sub), "%s/saves", p);
+    mkdir_p(sub);
 }
 
 
