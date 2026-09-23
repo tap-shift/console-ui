@@ -10,3 +10,13 @@ add_executable(console_ui src/main.c)
 target_link_libraries(console_ui raylib m pthread dl curl cjson)
 
 file(COPY assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+
+enable_testing()
+
+add_executable(test_parse test_parse.c)
+target_link_libraries(test_parse cjson)
+add_test(NAME ParseTest COMMAND test_parse)
+
+add_executable(test_cache_dir test_cache_dir.c)
+target_link_libraries(test_cache_dir raylib m pthread dl curl cjson)
+add_test(NAME CacheDirTest COMMAND test_cache_dir)
