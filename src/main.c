@@ -1340,10 +1340,21 @@ int main(void) {
                         // Cycle Audio Sink
                         if (actual_audio_sink_count > 0) {
                             active_audio_device = (active_audio_device + 1) % actual_audio_sink_count;
-                            char cmd[512];
-                            snprintf(cmd, sizeof(cmd), "pactl set-default-sink %s > /dev/null 2>&1 &", actual_audio_sinks[active_audio_device]);
-                            int ret = system(cmd);
-                            (void)ret;
+                            pid_t pid = fork();
+                            if (pid == 0) {
+                                pid_t pid2 = fork();
+                                if (pid2 == 0) {
+                                    freopen("/dev/null", "w", stdout);
+                                    freopen("/dev/null", "w", stderr);
+                                    execlp("pactl", "pactl", "set-default-sink", actual_audio_sinks[active_audio_device], (char *)NULL);
+                                    _exit(1);
+                                } else if (pid2 > 0) {
+                                    _exit(0);
+                                }
+                                _exit(1);
+                            } else if (pid > 0) {
+                                waitpid(pid, NULL, 0);
+                            }
                         }
                     } else if (settings_tab == 1 && settings_row == 0) {
                         show_profile_dropdown = true;
