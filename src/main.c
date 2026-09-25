@@ -150,6 +150,7 @@ typedef struct {
     char id[64];
     char username[128];
     char avatar_url[256];
+    int username_width;
 } User;
 
 #define MAX_USERS 16
@@ -347,15 +348,23 @@ void* SaveSyncThread(void* arg) {
 
     snprintf(save_dir, sizeof(save_dir), "%s/saves/%s/%s", cache_dir, u_id, game_id);
 
-    char cmd[512];
-
     if (access(save_dir, F_OK) == 0) {
         // Tar the save dir
         char tar_path[512];
         snprintf(tar_path, sizeof(tar_path), "/tmp/save_%s.tar.gz", game_id);
-        snprintf(cmd, sizeof(cmd), "tar -czf \"%s\" -C \"%s\" .", tar_path, save_dir);
-        int ret = system(cmd);
-        (void)ret;
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            // Child process
+            execlp("tar", "tar", "-czf", tar_path, "-C", save_dir, ".", (char*)NULL);
+            _exit(1); // _exit if execlp fails to avoid flushing standard I/O buffers
+        } else if (pid > 0) {
+            // Parent process
+            int status;
+            waitpid(pid, &status, 0);
+        } else {
+            // Fork failed, handle error or just continue without tar
+        }
 
         // Upload
         CURL *curl = curl_easy_init();
@@ -404,7 +413,8 @@ void* BackendWorkerThread(void* arg) {
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // HEAD request
         if (curl_easy_perform(curl) != CURLE_OK) {
-            strcpy(base_url, "https://TowerServer.local:8080");
+            strncpy(base_url, "http://TowerServer.local:8080", sizeof(base_url) - 1);
+            base_url[sizeof(base_url) - 1] = '\0';
         }
         curl_easy_cleanup(curl);
     }
@@ -442,7 +452,10 @@ void* BackendWorkerThread(void* arg) {
                                 cJSON *username = cJSON_GetObjectItemCaseSensitive(item, "username");
                                 cJSON *avatar = cJSON_GetObjectItemCaseSensitive(item, "avatar_url");
                                 if (cJSON_IsString(id)) strncpy(users[i].id, id->valuestring, sizeof(users[i].id)-1);
-                                if (cJSON_IsString(username)) strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
+                                if (cJSON_IsString(username)) {
+                                    strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
+                                    users[i].username_width = -1; // Invalidate cache
+                                }
                                 if (cJSON_IsString(avatar)) {
                                     if (avatar->valuestring[0] == '/') {
                                         snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "https://192.168.222.181:8080%s", avatar->valuestring);
@@ -452,8 +465,8 @@ void* BackendWorkerThread(void* arg) {
                                 }
                             }
                             pthread_mutex_unlock(&backend_mutex);
-                            cJSON_Delete(json);
                         }
+                        if (json != NULL) cJSON_Delete(json);
                     }
                 }
                 free(chunk.memory);
@@ -563,11 +576,11 @@ void* BackendWorkerThread(void* arg) {
                                     }
                                 }
                             }
-                            cJSON_Delete(json);
                             pthread_mutex_lock(&backend_mutex);
                             cover_download_pending = true;
                             pthread_mutex_unlock(&backend_mutex);
                         }
+                        if (json != NULL) cJSON_Delete(json);
                     }
                 }
                 if (chunk.memory) free(chunk.memory);
@@ -727,33 +740,38 @@ void* UpdateInstallerThread(void* arg) {
     (void)arg;
 
     pthread_mutex_lock(&update_mutex);
-    strcpy(update_status_text, "Fetching repository...");
+    strncpy(update_status_text, "Fetching repository...", sizeof(update_status_text) - 1);
+    update_status_text[sizeof(update_status_text) - 1] = '\0';
     pthread_mutex_unlock(&update_mutex);
 
     int ret = system("git pull origin main > update.log 2>&1");
     if (ret != 0) {
         pthread_mutex_lock(&update_mutex);
         update_failed = true;
-        strcpy(update_status_text, "Failed to pull from repository.");
+        strncpy(update_status_text, "Failed to pull from repository.", sizeof(update_status_text) - 1);
+        update_status_text[sizeof(update_status_text) - 1] = '\0';
         pthread_mutex_unlock(&update_mutex);
         return NULL;
     }
 
     pthread_mutex_lock(&update_mutex);
-    strcpy(update_status_text, "Compiling targets...");
+    strncpy(update_status_text, "Compiling targets...", sizeof(update_status_text) - 1);
+    update_status_text[sizeof(update_status_text) - 1] = '\0';
     pthread_mutex_unlock(&update_mutex);
 
     ret = system("cmake -B build -DCMAKE_BUILD_TYPE=Release >> update.log 2>&1 && cmake --build build -j$(nproc) >> update.log 2>&1");
     if (ret != 0) {
         pthread_mutex_lock(&update_mutex);
         update_failed = true;
-        strcpy(update_status_text, "Compilation failed! Check update.log");
+        strncpy(update_status_text, "Compilation failed! Check update.log", sizeof(update_status_text) - 1);
+        update_status_text[sizeof(update_status_text) - 1] = '\0';
         pthread_mutex_unlock(&update_mutex);
         return NULL;
     }
 
     pthread_mutex_lock(&update_mutex);
-    strcpy(update_status_text, "Finalizing assets...");
+    strncpy(update_status_text, "Finalizing assets...", sizeof(update_status_text) - 1);
+    update_status_text[sizeof(update_status_text) - 1] = '\0';
     sleep(1); // Give it a brief moment to show success
     update_success = true;
     pthread_mutex_unlock(&update_mutex);
@@ -1251,7 +1269,8 @@ int main(void) {
                     current_state = STATE_DASHBOARD;
                     update_in_progress = false;
                     update_failed = false;
-                    strcpy(update_status_text, "Initializing...");
+                    strncpy(update_status_text, "Initializing...", sizeof(update_status_text) - 1);
+                    update_status_text[sizeof(update_status_text) - 1] = '\0';
                     pthread_mutex_unlock(&update_mutex);
                 }
             }
@@ -1735,12 +1754,23 @@ int main(void) {
             // Quick Action Dock
             const char* dock_items[] = { "Library", "Settings", "Media", "Power" };
             int dock_item_count = 4;
-            int total_dock_width = 0;
-            for (int i=0; i<dock_item_count; i++) total_dock_width += MeasureText(dock_items[i], 20) + 60; // 60 for padding + spacing
-            int dock_x = (SCREEN_WIDTH - total_dock_width) / 2;
+
+            static int cached_dock_item_widths[4] = {0};
+            static int cached_total_dock_width = 0;
+            static bool dock_widths_cached = false;
+
+            if (!dock_widths_cached) {
+                for (int i=0; i<dock_item_count; i++) {
+                    cached_dock_item_widths[i] = MeasureText(dock_items[i], 20);
+                    cached_total_dock_width += cached_dock_item_widths[i] + 60; // 60 for padding + spacing
+                }
+                dock_widths_cached = true;
+            }
+
+            int dock_x = (SCREEN_WIDTH - cached_total_dock_width) / 2;
             int dock_y = SCREEN_HEIGHT - 120;
             for (int i=0; i<dock_item_count; i++) {
-                int iw = MeasureText(dock_items[i], 20);
+                int iw = cached_dock_item_widths[i];
                 Rectangle dock_rect = {dock_x, dock_y, iw + 40, 50};
 
                 if (i == dock_selection) {
@@ -1949,7 +1979,11 @@ int main(void) {
                     DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_IDLE);
                 }
 
-                int tw = MeasureText(users[i].username, 24);
+                if (users[i].username_width == -1) {
+                    users[i].username_width = MeasureText(users[i].username, 24);
+                }
+
+                int tw = users[i].username_width;
                 DrawText(users[i].username, x + card_w/2 - tw/2, y + card_w + 20, 24, (i == active_user_index) ? COLOR_TEXT_MAIN : COLOR_TEXT_MUTED);
             }
         } else if (render_state == STATE_CONTROLLER_TEST) {
@@ -2030,7 +2064,8 @@ int main(void) {
             pthread_mutex_lock(&update_mutex);
             bool failed = update_failed;
             char status_copy[256];
-            strcpy(status_copy, update_status_text);
+            strncpy(status_copy, update_status_text, sizeof(status_copy) - 1);
+            status_copy[sizeof(status_copy) - 1] = '\0';
             pthread_mutex_unlock(&update_mutex);
 
             if (!failed) {
