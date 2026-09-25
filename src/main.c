@@ -70,12 +70,6 @@ void MakeDirs() {
 }
 
 
-#if defined(RAYLIB_VERSION_MAJOR) && (RAYLIB_VERSION_MAJOR < 5 || (RAYLIB_VERSION_MAJOR == 5 && RAYLIB_VERSION_MINOR < 5))
-// Fallback for Raylib <= 5.0 test environments
-void DrawRectangleRoundedLinesEx(Rectangle rec, float roundness, int segments, float lineThick, Color color) {
-    DrawRectangleRoundedLines(rec, roundness, segments, lineThick, color);
-}
-#endif
 
 #define SCREEN_WIDTH 1920
 #define SCREEN_HEIGHT 1080
@@ -1604,7 +1598,7 @@ int main(void) {
                     Rectangle glow_rect = { rect.x - 8, rect.y - 8, rect.width + 16, rect.height + 16 };
                     DrawRectangleRounded(glow_rect, 0.15f, 32, Fade(COLOR_ACCENT, 0.4f));
                     DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_FOCUS);
-                    DrawRectangleRoundedLinesEx(rect, 0.15f, 32, 2.0f, COLOR_ACCENT); // micro-border
+                    DrawRectangleRoundedLines(rect, 0.15f, 32, 2.0f, COLOR_ACCENT); // micro-border
                 } else {
                     DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_IDLE);
                 }
@@ -1646,7 +1640,7 @@ int main(void) {
             right_anchor -= 60;
             if (topbar_selection == 1) {
                 DrawRectangleRounded(settings_rect, 0.15f, 16, COLOR_CARD_FOCUS);
-                DrawRectangleRoundedLinesEx(settings_rect, 0.15f, 16, 2.0f, COLOR_ACCENT);
+                DrawRectangleRoundedLines(settings_rect, 0.15f, 16, 2.0f, COLOR_ACCENT);
 
                 int sw = MeasureText("Settings", 20);
                 Rectangle tooltip_rect = { settings_rect.x + settings_rect.width / 2.0f - sw / 2.0f - 10, settings_rect.y + settings_rect.height + 10, sw + 20, 30 };
@@ -1678,7 +1672,7 @@ int main(void) {
 
             if (topbar_selection == 0) {
                 DrawRectangleRounded(profile_rect, 0.15f, 16, COLOR_CARD_FOCUS);
-                DrawRectangleRoundedLinesEx(profile_rect, 0.15f, 16, 2.0f, COLOR_ACCENT);
+                DrawRectangleRoundedLines(profile_rect, 0.15f, 16, 2.0f, COLOR_ACCENT);
 
                 int pw = MeasureText(username_disp, 20);
                 Rectangle tooltip_rect = { profile_rect.x + profile_rect.width / 2.0f - pw / 2.0f - 10, profile_rect.y + profile_rect.height + 10, pw + 20, 30 };
@@ -1775,7 +1769,7 @@ int main(void) {
 
                 if (i == dock_selection) {
                     DrawRectangleRounded(dock_rect, 0.5f, 16, COLOR_CARD_FOCUS);
-                    DrawRectangleRoundedLinesEx(dock_rect, 0.5f, 16, 2.0f, COLOR_ACCENT);
+                    DrawRectangleRoundedLines(dock_rect, 0.5f, 16, 2.0f, COLOR_ACCENT);
                     DrawText(dock_items[i], dock_x + 20, dock_y + 15, 20, COLOR_TEXT_MAIN);
                 } else {
                     DrawRectangleRounded(dock_rect, 0.5f, 16, COLOR_CARD_IDLE);
@@ -1815,7 +1809,7 @@ int main(void) {
                     Rectangle n_rect = { notif_drawer_x + 20, y_offset, (float)nw + 40, 40 };
 
                     DrawRectangleRounded(n_rect, 0.5f, 16, COLOR_CARD_FOCUS);
-                    DrawRectangleRoundedLinesEx(n_rect, 0.5f, 16, 2.0f, COLOR_ACCENT);
+                    DrawRectangleRoundedLines(n_rect, 0.5f, 16, 2.0f, COLOR_ACCENT);
                     DrawText(notifications[idx].message, notif_drawer_x + 40, y_offset + 10, 20, COLOR_TEXT_MAIN);
                 }
                 pthread_mutex_unlock(&notif_mutex);
@@ -1858,7 +1852,7 @@ int main(void) {
                 // Mute Row
                 Color r_color = (settings_row == 0 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
                 if (settings_row == 0) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
-                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLines((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
                 DrawText("Mute Master Audio", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 DrawRectangleRounded((Rectangle){right_x + max_w - 120, right_y - 5, 120, 40}, 1.0f, 32, bgm_muted ? COLOR_CARD_IDLE : COLOR_ACCENT);
@@ -1870,7 +1864,7 @@ int main(void) {
                 extern char* actual_audio_sinks[]; // Defined later
                 r_color = (settings_row == 1 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
                 if (settings_row == 1) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
-                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLines((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
                 DrawText("Output Device", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 const char* disp_name = (actual_audio_sink_count > 0 && active_audio_device < actual_audio_sink_count) ? actual_audio_sinks[active_audio_device] : audio_sinks[0];
@@ -1886,7 +1880,7 @@ int main(void) {
                 // Profile Row
                 Color r_color = (settings_row == 0 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
                 if (settings_row == 0) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
-                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLines((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
                 DrawText("Active Profile", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 int pr_w = MeasureText(profile_names[(int)active_profile], 20);
                 DrawText(profile_names[(int)active_profile], right_x + max_w - pr_w - 20, right_y + 10, 20, (settings_row == 0 && settings_focus_right_pane) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
@@ -1895,7 +1889,7 @@ int main(void) {
                 // Test Row
                 r_color = (settings_row == 1 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
                 if (settings_row == 1) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
-                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLines((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
                 DrawText("Test Controller Mapping", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 DrawText("START >", right_x + max_w - 100, right_y + 10, 20, (settings_row == 1 && settings_focus_right_pane) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
             } else if (settings_tab == 2) { // System
@@ -1941,7 +1935,7 @@ int main(void) {
                 float modal_y = (SCREEN_HEIGHT - modal_h) / 2.0f;
 
                 DrawRectangleRounded((Rectangle){modal_x, modal_y, modal_w, modal_h}, 0.15f, 32, COLOR_CARD_IDLE);
-                DrawRectangleRoundedLinesEx((Rectangle){modal_x, modal_y, modal_w, modal_h}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+                DrawRectangleRoundedLines((Rectangle){modal_x, modal_y, modal_w, modal_h}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
                 DrawText("Select Layout", modal_x + modal_w/2 - MeasureText("Select Layout", 24)/2, modal_y + 20, 24, COLOR_TEXT_MAIN);
 
@@ -1974,7 +1968,7 @@ int main(void) {
                 Rectangle rect = { x, y, card_w, card_w };
                 if (i == active_user_index) {
                     DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_FOCUS);
-                    DrawRectangleRoundedLinesEx(rect, 0.15f, 32, 4.0f, COLOR_ACCENT);
+                    DrawRectangleRoundedLines(rect, 0.15f, 32, 4.0f, COLOR_ACCENT);
                 } else {
                     DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_IDLE);
                 }
@@ -1994,7 +1988,7 @@ int main(void) {
             float cy = SCREEN_HEIGHT / 2.0f;
 
             DrawRectangleRounded((Rectangle){cx - 400, cy - 300, 800, 600}, 0.15f, 32, COLOR_CARD_IDLE);
-            DrawRectangleRoundedLinesEx((Rectangle){cx - 400, cy - 300, 800, 600}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+            DrawRectangleRoundedLines((Rectangle){cx - 400, cy - 300, 800, 600}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
             const char* gp_name_orig = IsGamepadAvailable(active_gamepad) ? GetGamepadName(active_gamepad) : "No Gamepad Detected";
             int nw = MeasureText(gp_name_orig, 24);
@@ -2031,7 +2025,7 @@ int main(void) {
             float sx = cx - 200;
             float sy = cy + 50;
             Rectangle stick_box = { sx - 60, sy - 60, 120, 120 };
-            DrawRectangleRoundedLinesEx(stick_box, 0.15f, 32, 2.0f, COLOR_TEXT_MUTED);
+            DrawRectangleRoundedLines(stick_box, 0.15f, 32, 2.0f, COLOR_TEXT_MUTED);
 
             float ax = GetGamepadAxisMovement(active_gamepad, GAMEPAD_AXIS_LEFT_X);
             float ay = GetGamepadAxisMovement(active_gamepad, GAMEPAD_AXIS_LEFT_Y);
@@ -2098,7 +2092,7 @@ int main(void) {
                 float py = SCREEN_HEIGHT / 2.0f - panel_h / 2.0f;
 
                 DrawRectangleRounded((Rectangle){ px, py, panel_w, panel_h }, 0.15f, 16, COLOR_CARD_IDLE);
-                DrawRectangleRoundedLinesEx((Rectangle){ px, py, panel_w, panel_h }, 0.15f, 16, 2.0f, COLOR_TEXT_MUTED);
+                DrawRectangleRoundedLines((Rectangle){ px, py, panel_w, panel_h }, 0.15f, 16, 2.0f, COLOR_TEXT_MUTED);
 
                 const char* title = "Game Paused";
                 int tw = MeasureText(title, 32);
