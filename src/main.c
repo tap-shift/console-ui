@@ -187,6 +187,8 @@ const char* audio_sinks[2] = {
     "DualSense Wireless Controller Audio"
 };
 
+char global_server_url[256] = "http://127.0.0.1:8080";
+
 void PopulateAudioDevices() {
     FILE* fp = popen("pactl list short sinks 2>/dev/null | awk '{print $2}'", "r");
     if (fp != NULL) {
@@ -251,6 +253,11 @@ void LoadSettings() {
             string[fsize] = 0;
             cJSON *json = cJSON_Parse(string);
             if (json) {
+                cJSON *server_json = cJSON_GetObjectItem(json, "server_url");
+                if (cJSON_IsString(server_json) && (server_json->valuestring != NULL)) {
+                    strncpy(global_server_url, server_json->valuestring, sizeof(global_server_url)-1);
+                    global_server_url[sizeof(global_server_url)-1] = '\0';
+                }
                 cJSON *bgm = cJSON_GetObjectItem(json, "bgm_muted");
                 if (cJSON_IsBool(bgm)) bgm_muted = cJSON_IsTrue(bgm);
                 cJSON *audio = cJSON_GetObjectItem(json, "active_audio_device");
@@ -277,6 +284,7 @@ void SaveSettings() {
     cJSON_AddNumberToObject(json, "active_audio_device", active_audio_device);
     cJSON_AddNumberToObject(json, "active_profile", (int)active_profile);
     cJSON_AddStringToObject(json, "last_active_user", active_user_id);
+    cJSON_AddStringToObject(json, "server_url", global_server_url);
     char *string = cJSON_Print(json);
     FILE *fp = fopen(settings_path, "w");
     if (fp) {
@@ -361,7 +369,8 @@ void* SaveSyncThread(void* arg) {
         // Upload
         CURL *curl = curl_easy_init();
         if (curl) {
-            char url[256] = "http://192.168.222.181:8080/api/v1/saves/sync";
+            char url[512];
+            snprintf(url, sizeof(url), "%s/api/v1/saves/sync", global_server_url);
             curl_mime *form = curl_mime_init(curl);
             curl_mimepart *field;
 
@@ -396,20 +405,6 @@ void* BackendWorkerThread(void* arg) {
     CURL *curl;
     CURLcode res;
 
-    char base_url[128] = "http://192.168.222.181:8080";
-
-    // Test primary endpoint, fallback if needed
-    curl = curl_easy_init();
-    if(curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.222.181:8080/api/v1/system/status");
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
-        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // HEAD request
-        if (curl_easy_perform(curl) != CURLE_OK) {
-            strcpy(base_url, "http://TowerServer.local:8080");
-        }
-        curl_easy_cleanup(curl);
-    }
-
     while(1) {
         if (users_fetch_pending) {
             users_fetch_pending = false;
@@ -420,7 +415,7 @@ void* BackendWorkerThread(void* arg) {
                 chunk.size = 0;
 
                 char url[256];
-                snprintf(url, sizeof(url), "%s/api/v1/users", base_url);
+                snprintf(url, sizeof(url), "%s/api/v1/users", global_server_url);
                 curl_easy_setopt(curl, CURLOPT_URL, url);
                 curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
                 curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
@@ -446,9 +441,9 @@ void* BackendWorkerThread(void* arg) {
                                 if (cJSON_IsString(username)) strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
                                 if (cJSON_IsString(avatar)) {
                                     if (avatar->valuestring[0] == '/') {
-                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "http://192.168.222.181:8080%s", avatar->valuestring);
+                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "%s%s", global_server_url, avatar->valuestring);
                                     } else {
-                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "%s%s", base_url, avatar->valuestring);
+                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "%s/%s", global_server_url, avatar->valuestring);
                                     }
                                 }
                             }
@@ -471,7 +466,7 @@ void* BackendWorkerThread(void* arg) {
                 chunk.size = 0;
 
                 char url[256];
-                snprintf(url, sizeof(url), "%s/api/v1/games?user=%s", base_url, active_user_id);
+                snprintf(url, sizeof(url), "%s/api/v1/games?user=%s", global_server_url, active_user_id);
                 curl_easy_setopt(curl, CURLOPT_URL, url);
                 curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
                 curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
@@ -513,9 +508,9 @@ void* BackendWorkerThread(void* arg) {
 
                                     char cover_full_url[512];
                                     if (cover_url->valuestring[0] == '/') {
-                                        snprintf(cover_full_url, sizeof(cover_full_url), "http://192.168.222.181:8080%s", cover_url->valuestring);
+                                        snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", global_server_url, cover_url->valuestring);
                                     } else {
-                                        snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", base_url, cover_url->valuestring);
+                                        snprintf(cover_full_url, sizeof(cover_full_url), "%s/%s", global_server_url, cover_url->valuestring);
                                     }
 
                                     char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
@@ -634,7 +629,7 @@ void* BackendWorkerThread(void* arg) {
             chunk.size = 0;
 
             char url[256];
-            snprintf(url, sizeof(url), "%s/api/v1/system/status", base_url);
+            snprintf(url, sizeof(url), "%s/api/v1/system/status", global_server_url);
             curl_easy_setopt(curl, CURLOPT_URL, url);
             curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
