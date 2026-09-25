@@ -432,27 +432,29 @@ void* BackendWorkerThread(void* arg) {
                     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
                     if (response_code == 200) {
                         cJSON *json = cJSON_Parse(chunk.memory);
-                        if (json != NULL && cJSON_IsArray(json)) {
-                            int num_users = cJSON_GetArraySize(json);
-                            if (num_users > MAX_USERS) num_users = MAX_USERS;
-                            pthread_mutex_lock(&backend_mutex);
-                            user_count = num_users;
-                            for (int i = 0; i < num_users; i++) {
-                                cJSON *item = cJSON_GetArrayItem(json, i);
-                                cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "id");
-                                cJSON *username = cJSON_GetObjectItemCaseSensitive(item, "username");
-                                cJSON *avatar = cJSON_GetObjectItemCaseSensitive(item, "avatar_url");
-                                if (cJSON_IsString(id)) strncpy(users[i].id, id->valuestring, sizeof(users[i].id)-1);
-                                if (cJSON_IsString(username)) strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
-                                if (cJSON_IsString(avatar)) {
-                                    if (avatar->valuestring[0] == '/') {
-                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "http://192.168.222.181:8080%s", avatar->valuestring);
-                                    } else {
-                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "%s%s", base_url, avatar->valuestring);
+                        if (json != NULL) {
+                            if (cJSON_IsArray(json)) {
+                                int num_users = cJSON_GetArraySize(json);
+                                if (num_users > MAX_USERS) num_users = MAX_USERS;
+                                pthread_mutex_lock(&backend_mutex);
+                                user_count = num_users;
+                                for (int i = 0; i < num_users; i++) {
+                                    cJSON *item = cJSON_GetArrayItem(json, i);
+                                    cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "id");
+                                    cJSON *username = cJSON_GetObjectItemCaseSensitive(item, "username");
+                                    cJSON *avatar = cJSON_GetObjectItemCaseSensitive(item, "avatar_url");
+                                    if (cJSON_IsString(id)) strncpy(users[i].id, id->valuestring, sizeof(users[i].id)-1);
+                                    if (cJSON_IsString(username)) strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
+                                    if (cJSON_IsString(avatar)) {
+                                        if (avatar->valuestring[0] == '/') {
+                                            snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "http://192.168.222.181:8080%s", avatar->valuestring);
+                                        } else {
+                                            snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "%s%s", base_url, avatar->valuestring);
+                                        }
                                     }
                                 }
+                                pthread_mutex_unlock(&backend_mutex);
                             }
-                            pthread_mutex_unlock(&backend_mutex);
                             cJSON_Delete(json);
                         }
                     }
@@ -483,91 +485,93 @@ void* BackendWorkerThread(void* arg) {
                     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
                     if (response_code == 200) {
                         cJSON *json = cJSON_Parse(chunk.memory);
-                        if (json != NULL && cJSON_IsArray(json)) {
-                            int num_games = cJSON_GetArraySize(json);
-                            if (num_games > MAX_GAMES) num_games = MAX_GAMES;
+                        if (json != NULL) {
+                            if (cJSON_IsArray(json)) {
+                                int num_games = cJSON_GetArraySize(json);
+                                if (num_games > MAX_GAMES) num_games = MAX_GAMES;
 
-                            pthread_mutex_lock(&backend_mutex);
-                            game_count = num_games;
+                                pthread_mutex_lock(&backend_mutex);
+                                game_count = num_games;
 
-                            for (int i = 0; i < num_games; i++) {
-                                cJSON *item = cJSON_GetArrayItem(json, i);
-                                cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "id");
-                                cJSON *title = cJSON_GetObjectItemCaseSensitive(item, "title");
-                                cJSON *launch_path = cJSON_GetObjectItemCaseSensitive(item, "launch_path");
-                                cJSON *cover_url = cJSON_GetObjectItemCaseSensitive(item, "cover_url");
+                                for (int i = 0; i < num_games; i++) {
+                                    cJSON *item = cJSON_GetArrayItem(json, i);
+                                    cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "id");
+                                    cJSON *title = cJSON_GetObjectItemCaseSensitive(item, "title");
+                                    cJSON *launch_path = cJSON_GetObjectItemCaseSensitive(item, "launch_path");
+                                    cJSON *cover_url = cJSON_GetObjectItemCaseSensitive(item, "cover_url");
 
-                                if (cJSON_IsString(id)) strncpy(games[i].id, id->valuestring, sizeof(games[i].id) - 1);
-                                if (cJSON_IsString(title)) strncpy(games[i].title, title->valuestring, sizeof(games[i].title) - 1);
-                                if (cJSON_IsString(launch_path)) strncpy(games[i].launch_path, launch_path->valuestring, sizeof(games[i].launch_path) - 1);
-                                if (cJSON_IsString(cover_url)) {
-                                    strncpy(games[i].cover_url, cover_url->valuestring, sizeof(games[i].cover_url) - 1);
-                                }
-                            }
-                            pthread_mutex_unlock(&backend_mutex);
-
-                            for (int i = 0; i < num_games; i++) {
-                                cJSON *item = cJSON_GetArrayItem(json, i);
-                                cJSON *cover_url = cJSON_GetObjectItemCaseSensitive(item, "cover_url");
-                                if (cJSON_IsString(cover_url)) {
-
-                                    char cover_full_url[512];
-                                    if (cover_url->valuestring[0] == '/') {
-                                        snprintf(cover_full_url, sizeof(cover_full_url), "http://192.168.222.181:8080%s", cover_url->valuestring);
-                                    } else {
-                                        snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", base_url, cover_url->valuestring);
+                                    if (cJSON_IsString(id)) strncpy(games[i].id, id->valuestring, sizeof(games[i].id) - 1);
+                                    if (cJSON_IsString(title)) strncpy(games[i].title, title->valuestring, sizeof(games[i].title) - 1);
+                                    if (cJSON_IsString(launch_path)) strncpy(games[i].launch_path, launch_path->valuestring, sizeof(games[i].launch_path) - 1);
+                                    if (cJSON_IsString(cover_url)) {
+                                        strncpy(games[i].cover_url, cover_url->valuestring, sizeof(games[i].cover_url) - 1);
                                     }
+                                }
+                                pthread_mutex_unlock(&backend_mutex);
 
-                                    char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
+                                for (int i = 0; i < num_games; i++) {
+                                    cJSON *item = cJSON_GetArrayItem(json, i);
+                                    cJSON *cover_url = cJSON_GetObjectItemCaseSensitive(item, "cover_url");
+                                    if (cJSON_IsString(cover_url)) {
 
-                                    char local_path[512];
-                                    snprintf(local_path, sizeof(local_path), "%s/covers/%s.png", cache_dir, games[i].id);
+                                        char cover_full_url[512];
+                                        if (cover_url->valuestring[0] == '/') {
+                                            snprintf(cover_full_url, sizeof(cover_full_url), "http://192.168.222.181:8080%s", cover_url->valuestring);
+                                        } else {
+                                            snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", base_url, cover_url->valuestring);
+                                        }
 
-                                    games[i].cover_downloaded = false;
-                                    games[i].cover_failed = false;
+                                        char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
 
-                                    FILE *fp = fopen(local_path, "wb");
-                                    if (fp) {
-                                        CURL *curl_dl = curl_easy_init();
-                                        if (curl_dl) {
-                                            curl_easy_setopt(curl_dl, CURLOPT_URL, cover_full_url);
-                                            curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
-                                            curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
-                                            CURLcode dl_res = curl_easy_perform(curl_dl);
-                                            long response_code = 0;
-                                            curl_easy_getinfo(curl_dl, CURLINFO_RESPONSE_CODE, &response_code);
-                                            if (dl_res == CURLE_OK && response_code == 200) {
-                                                pthread_mutex_lock(&backend_mutex);
-                                                games[i].cover_downloaded = true;
-                                                pthread_mutex_unlock(&backend_mutex);
+                                        char local_path[512];
+                                        snprintf(local_path, sizeof(local_path), "%s/covers/%s.png", cache_dir, games[i].id);
+
+                                        games[i].cover_downloaded = false;
+                                        games[i].cover_failed = false;
+
+                                        FILE *fp = fopen(local_path, "wb");
+                                        if (fp) {
+                                            CURL *curl_dl = curl_easy_init();
+                                            if (curl_dl) {
+                                                curl_easy_setopt(curl_dl, CURLOPT_URL, cover_full_url);
+                                                curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
+                                                curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
+                                                CURLcode dl_res = curl_easy_perform(curl_dl);
+                                                long response_code = 0;
+                                                curl_easy_getinfo(curl_dl, CURLINFO_RESPONSE_CODE, &response_code);
+                                                if (dl_res == CURLE_OK && response_code == 200) {
+                                                    pthread_mutex_lock(&backend_mutex);
+                                                    games[i].cover_downloaded = true;
+                                                    pthread_mutex_unlock(&backend_mutex);
+                                                } else {
+                                                    pthread_mutex_lock(&backend_mutex);
+                                                    games[i].cover_failed = true;
+                                                    pthread_mutex_unlock(&backend_mutex);
+                                                }
+                                                curl_easy_cleanup(curl_dl);
                                             } else {
                                                 pthread_mutex_lock(&backend_mutex);
                                                 games[i].cover_failed = true;
                                                 pthread_mutex_unlock(&backend_mutex);
                                             }
-                                            curl_easy_cleanup(curl_dl);
+                                            fclose(fp);
+                                            pthread_mutex_lock(&backend_mutex);
+                                            if (games[i].cover_failed) {
+                                                unlink(local_path);
+                                            }
+                                            pthread_mutex_unlock(&backend_mutex);
                                         } else {
                                             pthread_mutex_lock(&backend_mutex);
                                             games[i].cover_failed = true;
                                             pthread_mutex_unlock(&backend_mutex);
                                         }
-                                        fclose(fp);
-                                        pthread_mutex_lock(&backend_mutex);
-                                        if (games[i].cover_failed) {
-                                            unlink(local_path);
-                                        }
-                                        pthread_mutex_unlock(&backend_mutex);
-                                    } else {
-                                        pthread_mutex_lock(&backend_mutex);
-                                        games[i].cover_failed = true;
-                                        pthread_mutex_unlock(&backend_mutex);
                                     }
                                 }
+                                pthread_mutex_lock(&backend_mutex);
+                                cover_download_pending = true;
+                                pthread_mutex_unlock(&backend_mutex);
                             }
                             cJSON_Delete(json);
-                            pthread_mutex_lock(&backend_mutex);
-                            cover_download_pending = true;
-                            pthread_mutex_unlock(&backend_mutex);
                         }
                     }
                 }
