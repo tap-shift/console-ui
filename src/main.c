@@ -1736,12 +1736,23 @@ int main(void) {
             // Quick Action Dock
             const char* dock_items[] = { "Library", "Settings", "Media", "Power" };
             int dock_item_count = 4;
-            int total_dock_width = 0;
-            for (int i=0; i<dock_item_count; i++) total_dock_width += MeasureText(dock_items[i], 20) + 60; // 60 for padding + spacing
-            int dock_x = (SCREEN_WIDTH - total_dock_width) / 2;
+
+            static int cached_dock_item_widths[4] = {0};
+            static int cached_total_dock_width = 0;
+            static bool dock_widths_cached = false;
+
+            if (!dock_widths_cached) {
+                for (int i=0; i<dock_item_count; i++) {
+                    cached_dock_item_widths[i] = MeasureText(dock_items[i], 20);
+                    cached_total_dock_width += cached_dock_item_widths[i] + 60; // 60 for padding + spacing
+                }
+                dock_widths_cached = true;
+            }
+
+            int dock_x = (SCREEN_WIDTH - cached_total_dock_width) / 2;
             int dock_y = SCREEN_HEIGHT - 120;
             for (int i=0; i<dock_item_count; i++) {
-                int iw = MeasureText(dock_items[i], 20);
+                int iw = cached_dock_item_widths[i];
                 Rectangle dock_rect = {dock_x, dock_y, iw + 40, 50};
 
                 if (i == dock_selection) {
