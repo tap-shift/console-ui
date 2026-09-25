@@ -130,7 +130,6 @@ int game_count = 0;
 bool system_connected = false;
 long long total_bytes = 0;
 long long free_bytes = 0;
-char profile_username[128] = "";
 bool cover_download_pending = false;
 bool avatar_download_pending = false;
 
@@ -348,15 +347,23 @@ void* SaveSyncThread(void* arg) {
 
     snprintf(save_dir, sizeof(save_dir), "%s/saves/%s/%s", cache_dir, u_id, game_id);
 
-    char cmd[512];
-
     if (access(save_dir, F_OK) == 0) {
         // Tar the save dir
         char tar_path[512];
         snprintf(tar_path, sizeof(tar_path), "/tmp/save_%s.tar.gz", game_id);
-        snprintf(cmd, sizeof(cmd), "tar -czf \"%s\" -C \"%s\" .", tar_path, save_dir);
-        int ret = system(cmd);
-        (void)ret;
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            // Child process
+            execlp("tar", "tar", "-czf", tar_path, "-C", save_dir, ".", (char*)NULL);
+            _exit(1); // _exit if execlp fails to avoid flushing standard I/O buffers
+        } else if (pid > 0) {
+            // Parent process
+            int status;
+            waitpid(pid, &status, 0);
+        } else {
+            // Fork failed, handle error or just continue without tar
+        }
 
         // Upload
         CURL *curl = curl_easy_init();
