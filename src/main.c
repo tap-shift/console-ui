@@ -325,16 +325,16 @@ void SaveSettings() {
 void AddNotification(const char* msg) {
     pthread_mutex_lock(&notif_mutex);
     if (notification_count < MAX_NOTIFICATIONS) {
-        strncpy(notifications[notification_count].message, msg, 127);
-        notifications[notification_count].message[127] = '\0';
+        strncpy(notifications[notification_count].message, msg, sizeof(notifications[notification_count].message) - 1);
+        notifications[notification_count].message[sizeof(notifications[notification_count].message) - 1] = '\0';
         notifications[notification_count].width = MeasureText(notifications[notification_count].message, 20);
         notification_count++;
     } else {
         for (int i = 1; i < MAX_NOTIFICATIONS; i++) {
             memcpy(&notifications[i-1], &notifications[i], sizeof(Notification));
         }
-        strncpy(notifications[MAX_NOTIFICATIONS-1].message, msg, 127);
-        notifications[MAX_NOTIFICATIONS-1].message[127] = '\0';
+        strncpy(notifications[MAX_NOTIFICATIONS-1].message, msg, sizeof(notifications[MAX_NOTIFICATIONS-1].message) - 1);
+        notifications[MAX_NOTIFICATIONS-1].message[sizeof(notifications[MAX_NOTIFICATIONS-1].message) - 1] = '\0';
         notifications[MAX_NOTIFICATIONS-1].width = MeasureText(notifications[MAX_NOTIFICATIONS-1].message, 20);
     }
     unread_notifications++;
