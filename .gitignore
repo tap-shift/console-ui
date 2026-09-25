@@ -3,3 +3,7 @@ build/
 bin/
 *.o
 console_ui
+test_notifications
+test_data_dir
+test_parse
+test_cache_dir

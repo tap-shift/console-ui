@@ -70,12 +70,6 @@ void MakeDirs() {
 }
 
 
-#if defined(RAYLIB_VERSION_MAJOR) && (RAYLIB_VERSION_MAJOR < 5 || (RAYLIB_VERSION_MAJOR == 5 && RAYLIB_VERSION_MINOR < 5))
-// Fallback for Raylib <= 5.0 test environments
-void DrawRectangleRoundedLinesEx(Rectangle rec, float roundness, int segments, float lineThick, Color color) {
-    DrawRectangleRoundedLines(rec, roundness, segments, lineThick, color);
-}
-#endif
 
 #define SCREEN_WIDTH 1920
 #define SCREEN_HEIGHT 1080
@@ -150,6 +144,7 @@ typedef struct {
     char id[64];
     char username[128];
     char avatar_url[256];
+    int username_width;
 } User;
 
 #define MAX_USERS 16
@@ -375,7 +370,7 @@ void* SaveSyncThread(void* arg) {
         // Upload
         CURL *curl = curl_easy_init();
         if (curl) {
-            char url[256] = "http://192.168.222.181:8080/api/v1/saves/sync";
+            char url[256] = "https://192.168.222.181:8080/api/v1/saves/sync";
             curl_mime *form = curl_mime_init(curl);
             curl_mimepart *field;
 
@@ -410,16 +405,17 @@ void* BackendWorkerThread(void* arg) {
     CURL *curl;
     CURLcode res;
 
-    char base_url[128] = "http://192.168.222.181:8080";
+    char base_url[128] = "https://192.168.222.181:8080";
 
     // Test primary endpoint, fallback if needed
     curl = curl_easy_init();
     if(curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.222.181:8080/api/v1/system/status");
+        curl_easy_setopt(curl, CURLOPT_URL, "https://192.168.222.181:8080/api/v1/system/status");
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // HEAD request
         if (curl_easy_perform(curl) != CURLE_OK) {
-            strcpy(base_url, "http://TowerServer.local:8080");
+            strncpy(base_url, "http://TowerServer.local:8080", sizeof(base_url) - 1);
+            base_url[sizeof(base_url) - 1] = '\0';
         }
         curl_easy_cleanup(curl);
     }
@@ -457,10 +453,13 @@ void* BackendWorkerThread(void* arg) {
                                 cJSON *username = cJSON_GetObjectItemCaseSensitive(item, "username");
                                 cJSON *avatar = cJSON_GetObjectItemCaseSensitive(item, "avatar_url");
                                 if (cJSON_IsString(id)) strncpy(users[i].id, id->valuestring, sizeof(users[i].id)-1);
-                                if (cJSON_IsString(username)) strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
+                                if (cJSON_IsString(username)) {
+                                    strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
+                                    users[i].username_width = -1; // Invalidate cache
+                                }
                                 if (cJSON_IsString(avatar)) {
                                     if (avatar->valuestring[0] == '/') {
-                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "http://192.168.222.181:8080%s", avatar->valuestring);
+                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "https://192.168.222.181:8080%s", avatar->valuestring);
                                     } else {
                                         snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "%s%s", base_url, avatar->valuestring);
                                     }
@@ -468,55 +467,19 @@ void* BackendWorkerThread(void* arg) {
                             }
                             pthread_mutex_unlock(&backend_mutex);
                         }
-                        if (json != NULL) cJSON_Delete(json);
                     }
-                }
-                free(chunk.memory);
-                curl_easy_cleanup(curl);
-            }
-        }
+                    pthread_mutex_unlock(&backend_mutex);
 
-        if (games_fetch_pending && strlen(active_user_id) > 0) {
-            games_fetch_pending = false;
-            curl = curl_easy_init();
-            if (curl) {
-                struct MemoryStruct chunk;
-                chunk.memory = malloc(1);
-                chunk.size = 0;
+                    for (int i = 0; i < num_games; i++) {
+                        cJSON *item = cJSON_GetArrayItem(json, i);
+                        cJSON *cover_url = cJSON_GetObjectItemCaseSensitive(item, "cover_url");
+                        if (cJSON_IsString(cover_url)) {
 
-                char url[256];
-                snprintf(url, sizeof(url), "%s/api/v1/games?user=%s", base_url, active_user_id);
-                curl_easy_setopt(curl, CURLOPT_URL, url);
-                curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-                curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-                curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-
-                res = curl_easy_perform(curl);
-                if (res == CURLE_OK) {
-                    long response_code;
-                    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-                    if (response_code == 200) {
-                        cJSON *json = cJSON_Parse(chunk.memory);
-                        if (json != NULL && cJSON_IsArray(json)) {
-                            int num_games = cJSON_GetArraySize(json);
-                            if (num_games > MAX_GAMES) num_games = MAX_GAMES;
-
-                            pthread_mutex_lock(&backend_mutex);
-                            game_count = num_games;
-
-                            for (int i = 0; i < num_games; i++) {
-                                cJSON *item = cJSON_GetArrayItem(json, i);
-                                cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "id");
-                                cJSON *title = cJSON_GetObjectItemCaseSensitive(item, "title");
-                                cJSON *launch_path = cJSON_GetObjectItemCaseSensitive(item, "launch_path");
-                                cJSON *cover_url = cJSON_GetObjectItemCaseSensitive(item, "cover_url");
-
-                                if (cJSON_IsString(id)) strncpy(games[i].id, id->valuestring, sizeof(games[i].id) - 1);
-                                if (cJSON_IsString(title)) strncpy(games[i].title, title->valuestring, sizeof(games[i].title) - 1);
-                                if (cJSON_IsString(launch_path)) strncpy(games[i].launch_path, launch_path->valuestring, sizeof(games[i].launch_path) - 1);
-                                if (cJSON_IsString(cover_url)) {
-                                    strncpy(games[i].cover_url, cover_url->valuestring, sizeof(games[i].cover_url) - 1);
-                                }
+                            char cover_full_url[512];
+                            if (cover_url->valuestring[0] == '/') {
+                                snprintf(cover_full_url, sizeof(cover_full_url), "http://192.168.222.181:8080%s", cover_url->valuestring);
+                            } else {
+                                snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", base_url, cover_url->valuestring);
                             }
                             pthread_mutex_unlock(&backend_mutex);
 
@@ -527,173 +490,256 @@ void* BackendWorkerThread(void* arg) {
 
                                     char cover_full_url[512];
                                     if (cover_url->valuestring[0] == '/') {
-                                        snprintf(cover_full_url, sizeof(cover_full_url), "http://192.168.222.181:8080%s", cover_url->valuestring);
+                                        snprintf(cover_full_url, sizeof(cover_full_url), "https://192.168.222.181:8080%s", cover_url->valuestring);
                                     } else {
                                         snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", base_url, cover_url->valuestring);
                                     }
 
-                                    char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
+                            char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
 
-                                    char local_path[512];
-                                    snprintf(local_path, sizeof(local_path), "%s/covers/%s.png", cache_dir, games[i].id);
+                            char local_path[512];
+                            snprintf(local_path, sizeof(local_path), "%s/covers/%s.png", cache_dir, games[i].id);
 
-                                    games[i].cover_downloaded = false;
-                                    games[i].cover_failed = false;
+                            games[i].cover_downloaded = false;
+                            games[i].cover_failed = false;
 
-                                    FILE *fp = fopen(local_path, "wb");
-                                    if (fp) {
-                                        CURL *curl_dl = curl_easy_init();
-                                        if (curl_dl) {
-                                            curl_easy_setopt(curl_dl, CURLOPT_URL, cover_full_url);
-                                            curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
-                                            curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
-                                            CURLcode dl_res = curl_easy_perform(curl_dl);
-                                            long response_code = 0;
-                                            curl_easy_getinfo(curl_dl, CURLINFO_RESPONSE_CODE, &response_code);
-                                            if (dl_res == CURLE_OK && response_code == 200) {
-                                                pthread_mutex_lock(&backend_mutex);
-                                                games[i].cover_downloaded = true;
-                                                pthread_mutex_unlock(&backend_mutex);
-                                            } else {
-                                                pthread_mutex_lock(&backend_mutex);
-                                                games[i].cover_failed = true;
-                                                pthread_mutex_unlock(&backend_mutex);
-                                            }
-                                            curl_easy_cleanup(curl_dl);
-                                        } else {
-                                            pthread_mutex_lock(&backend_mutex);
-                                            games[i].cover_failed = true;
-                                            pthread_mutex_unlock(&backend_mutex);
-                                        }
-                                        fclose(fp);
+                            FILE *fp = fopen(local_path, "wb");
+                            if (fp) {
+                                CURL *curl_dl = curl_easy_init();
+                                if (curl_dl) {
+                                    curl_easy_setopt(curl_dl, CURLOPT_URL, cover_full_url);
+                                    curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
+                                    curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
+                                    CURLcode dl_res = curl_easy_perform(curl_dl);
+                                    long response_code_dl = 0;
+                                    curl_easy_getinfo(curl_dl, CURLINFO_RESPONSE_CODE, &response_code_dl);
+                                    if (dl_res == CURLE_OK && response_code_dl == 200) {
                                         pthread_mutex_lock(&backend_mutex);
-                                        if (games[i].cover_failed) {
-                                            unlink(local_path);
-                                        }
+                                        games[i].cover_downloaded = true;
                                         pthread_mutex_unlock(&backend_mutex);
                                     } else {
                                         pthread_mutex_lock(&backend_mutex);
                                         games[i].cover_failed = true;
                                         pthread_mutex_unlock(&backend_mutex);
                                     }
+                                    curl_easy_cleanup(curl_dl);
+                                } else {
+                                    pthread_mutex_lock(&backend_mutex);
+                                    games[i].cover_failed = true;
+                                    pthread_mutex_unlock(&backend_mutex);
                                 }
-                            }
-                            pthread_mutex_lock(&backend_mutex);
-                            cover_download_pending = true;
-                            pthread_mutex_unlock(&backend_mutex);
-                        }
-                        if (json != NULL) cJSON_Delete(json);
-                    }
-                }
-                if (chunk.memory) free(chunk.memory);
-                if (curl) curl_easy_cleanup(curl);
-            }
-        }
-
-        if (avatar_fetch_pending && strlen(avatar_download_url) > 0) {
-            avatar_fetch_pending = false;
-            char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
-
-            char local_path[512];
-            snprintf(local_path, sizeof(local_path), "%s/avatars/%s.png", cache_dir, active_user_id);
-            avatar_download_success = false;
-            avatar_download_failed = false;
-
-            FILE *fp = fopen(local_path, "wb");
-            if (fp) {
-                 CURL *curl_dl = curl_easy_init();
-                 if (curl_dl) {
-                     curl_easy_setopt(curl_dl, CURLOPT_URL, avatar_download_url);
-                     curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
-                     curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
-                     CURLcode dl_res = curl_easy_perform(curl_dl);
-                     long response_code = 0;
-                     curl_easy_getinfo(curl_dl, CURLINFO_RESPONSE_CODE, &response_code);
-                     if (dl_res == CURLE_OK && response_code == 200) {
-                         pthread_mutex_lock(&backend_mutex);
-                         avatar_download_success = true;
-                         pthread_mutex_unlock(&backend_mutex);
-                     } else {
-                         pthread_mutex_lock(&backend_mutex);
-                         avatar_download_failed = true;
-                         pthread_mutex_unlock(&backend_mutex);
-                     }
-                     curl_easy_cleanup(curl_dl);
-                 } else {
-                     pthread_mutex_lock(&backend_mutex);
-                     avatar_download_failed = true;
-                     pthread_mutex_unlock(&backend_mutex);
-                 }
-                 fclose(fp);
-                 pthread_mutex_lock(&backend_mutex);
-                 if (avatar_download_failed) {
-                     unlink(local_path);
-                 }
-                 pthread_mutex_unlock(&backend_mutex);
-
-                 pthread_mutex_lock(&backend_mutex);
-                 avatar_download_pending = true;
-                 pthread_mutex_unlock(&backend_mutex);
-            } else {
-                pthread_mutex_lock(&backend_mutex);
-                avatar_download_failed = true;
-                pthread_mutex_unlock(&backend_mutex);
-            }
-        }
-
-        curl = curl_easy_init();
-        if(curl) {
-            struct MemoryStruct chunk;
-            chunk.memory = malloc(1);
-            chunk.size = 0;
-
-            char url[256];
-            snprintf(url, sizeof(url), "%s/api/v1/system/status", base_url);
-            curl_easy_setopt(curl, CURLOPT_URL, url);
-            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-            curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
-
-            res = curl_easy_perform(curl);
-
-            bool connected = false;
-            long long tb = 0, fb = 0;
-
-            if(res == CURLE_OK) {
-                long response_code;
-                curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-                if (response_code == 200) {
-                    cJSON *json = cJSON_Parse(chunk.memory);
-                    if (json != NULL) {
-                        connected = true;
-                        cJSON *pools = cJSON_GetObjectItemCaseSensitive(json, "storage_pools");
-                        if (cJSON_IsArray(pools)) {
-                            cJSON *pool = cJSON_GetArrayItem(pools, 0);
-                            if (pool != NULL) {
-                                cJSON *total = cJSON_GetObjectItemCaseSensitive(pool, "total_bytes");
-                                cJSON *free_b = cJSON_GetObjectItemCaseSensitive(pool, "free_bytes");
-                                if (cJSON_IsNumber(total) && cJSON_IsNumber(free_b)) {
-                                    tb = (long long)total->valuedouble;
-                                    fb = (long long)free_b->valuedouble;
+                                fclose(fp);
+                                pthread_mutex_lock(&backend_mutex);
+                                if (games[i].cover_failed) {
+                                    unlink(local_path);
                                 }
+                                pthread_mutex_unlock(&backend_mutex);
+                            } else {
+                                pthread_mutex_lock(&backend_mutex);
+                                games[i].cover_failed = true;
+                                pthread_mutex_unlock(&backend_mutex);
                             }
                         }
-                        cJSON_Delete(json);
                     }
+                    pthread_mutex_lock(&backend_mutex);
+                    cover_download_pending = true;
+                    pthread_mutex_unlock(&backend_mutex);
+                }
+                if (json != NULL) cJSON_Delete(json);
+            }
+        }
+        if (chunk.memory) free(chunk.memory);
+        if (curl) curl_easy_cleanup(curl);
+    }
+}
+
+static void FetchSystemStatus(const char* base_url) {
+    CURL *curl = curl_easy_init();
+    if (curl) {
+        struct MemoryStruct chunk;
+        chunk.memory = malloc(1);
+        chunk.size = 0;
+
+        char url[256];
+        snprintf(url, sizeof(url), "%s/api/v1/system/status", base_url);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
+
+        CURLcode res = curl_easy_perform(curl);
+
+        bool connected = false;
+        long long tb = 0, fb = 0;
+
+        if (res == CURLE_OK) {
+            long response_code;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+            if (response_code == 200) {
+                cJSON *json = cJSON_Parse(chunk.memory);
+                if (json != NULL) {
+                    connected = true;
+                    cJSON *pools = cJSON_GetObjectItemCaseSensitive(json, "storage_pools");
+                    if (cJSON_IsArray(pools)) {
+                        cJSON *pool = cJSON_GetArrayItem(pools, 0);
+                        if (pool != NULL) {
+                            cJSON *total = cJSON_GetObjectItemCaseSensitive(pool, "total_bytes");
+                            cJSON *free_b = cJSON_GetObjectItemCaseSensitive(pool, "free_bytes");
+                            if (cJSON_IsNumber(total) && cJSON_IsNumber(free_b)) {
+                                tb = (long long)total->valuedouble;
+                                fb = (long long)free_b->valuedouble;
+                            }
+                        }
+                    }
+                    cJSON_Delete(json);
                 }
             }
-
-            pthread_mutex_lock(&backend_mutex);
-            system_connected = connected;
-            if (connected) {
-                total_bytes = tb;
-                free_bytes = fb;
-            }
-            pthread_mutex_unlock(&backend_mutex);
-
-            free(chunk.memory);
-            curl_easy_cleanup(curl);
         }
+
+        pthread_mutex_lock(&backend_mutex);
+        system_connected = connected;
+        if (connected) {
+            total_bytes = tb;
+            free_bytes = fb;
+        }
+        pthread_mutex_unlock(&backend_mutex);
+
+        free(chunk.memory);
+        curl_easy_cleanup(curl);
+    }
+}
+
+static void FetchAvatar(void) {
+    if (!avatar_fetch_pending || strlen(avatar_download_url) == 0) return;
+
+    avatar_fetch_pending = false;
+    char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
+
+    char local_path[512];
+    snprintf(local_path, sizeof(local_path), "%s/avatars/%s.png", cache_dir, active_user_id);
+    avatar_download_success = false;
+    avatar_download_failed = false;
+
+    FILE *fp = fopen(local_path, "wb");
+    if (fp) {
+         CURL *curl_dl = curl_easy_init();
+         if (curl_dl) {
+             curl_easy_setopt(curl_dl, CURLOPT_URL, avatar_download_url);
+             curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
+             curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
+             CURLcode dl_res = curl_easy_perform(curl_dl);
+             long response_code = 0;
+             curl_easy_getinfo(curl_dl, CURLINFO_RESPONSE_CODE, &response_code);
+             if (dl_res == CURLE_OK && response_code == 200) {
+                 pthread_mutex_lock(&backend_mutex);
+                 avatar_download_success = true;
+                 pthread_mutex_unlock(&backend_mutex);
+             } else {
+                 pthread_mutex_lock(&backend_mutex);
+                 avatar_download_failed = true;
+                 pthread_mutex_unlock(&backend_mutex);
+             }
+             curl_easy_cleanup(curl_dl);
+         } else {
+             pthread_mutex_lock(&backend_mutex);
+             avatar_download_failed = true;
+             pthread_mutex_unlock(&backend_mutex);
+         }
+         fclose(fp);
+         pthread_mutex_lock(&backend_mutex);
+         if (avatar_download_failed) {
+             unlink(local_path);
+         }
+         pthread_mutex_unlock(&backend_mutex);
+
+         pthread_mutex_lock(&backend_mutex);
+         avatar_download_pending = true;
+         pthread_mutex_unlock(&backend_mutex);
+    } else {
+        pthread_mutex_lock(&backend_mutex);
+        avatar_download_failed = true;
+        pthread_mutex_unlock(&backend_mutex);
+    }
+}
+
+static void FetchUsers(const char* base_url) {
+    if (!users_fetch_pending) return;
+
+    users_fetch_pending = false;
+    CURL *curl = curl_easy_init();
+    if(curl) {
+        struct MemoryStruct chunk;
+        chunk.memory = malloc(1);
+        chunk.size = 0;
+
+        char url[256];
+        snprintf(url, sizeof(url), "%s/api/v1/users", base_url);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+
+        CURLcode res = curl_easy_perform(curl);
+        if(res == CURLE_OK) {
+            long response_code;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+            if (response_code == 200) {
+                cJSON *json = cJSON_Parse(chunk.memory);
+                if (json != NULL && cJSON_IsArray(json)) {
+                    int num_users = cJSON_GetArraySize(json);
+                    if (num_users > MAX_USERS) num_users = MAX_USERS;
+                    pthread_mutex_lock(&backend_mutex);
+                    user_count = num_users;
+                    for (int i = 0; i < num_users; i++) {
+                        cJSON *item = cJSON_GetArrayItem(json, i);
+                        cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "id");
+                        cJSON *username = cJSON_GetObjectItemCaseSensitive(item, "username");
+                        cJSON *avatar = cJSON_GetObjectItemCaseSensitive(item, "avatar_url");
+                        if (cJSON_IsString(id)) strncpy(users[i].id, id->valuestring, sizeof(users[i].id)-1);
+                        if (cJSON_IsString(username)) strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
+                        if (cJSON_IsString(avatar)) {
+                            if (avatar->valuestring[0] == '/') {
+                                snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "http://192.168.222.181:8080%s", avatar->valuestring);
+                            } else {
+                                snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "%s%s", base_url, avatar->valuestring);
+                            }
+                        }
+                    }
+                    pthread_mutex_unlock(&backend_mutex);
+                }
+                if (json != NULL) cJSON_Delete(json);
+            }
+        }
+        free(chunk.memory);
+        curl_easy_cleanup(curl);
+    }
+}
+
+void* BackendWorkerThread(void* arg) {
+    (void)arg;
+    CURL *curl;
+
+    char base_url[128] = "http://192.168.222.181:8080";
+
+    // Test primary endpoint, fallback if needed
+    curl = curl_easy_init();
+    if(curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.222.181:8080/api/v1/system/status");
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // HEAD request
+        if (curl_easy_perform(curl) != CURLE_OK) {
+            strcpy(base_url, "http://TowerServer.local:8080");
+        }
+        curl_easy_cleanup(curl);
+    }
+
+    while(1) {
+        FetchUsers(base_url);
+
+        FetchGames(base_url);
+        FetchAvatar();
+        FetchSystemStatus(base_url);
+
         sleep(2);
     }
     return NULL;
@@ -741,29 +787,41 @@ void* UpdateCheckerThread(void* arg) {
 void* UpdateInstallerThread(void* arg) {
     (void)arg;
 
-    SetUpdateStatus("Fetching repository...");
+    pthread_mutex_lock(&update_mutex);
+    strncpy(update_status_text, "Fetching repository...", sizeof(update_status_text) - 1);
+    update_status_text[sizeof(update_status_text) - 1] = '\0';
+    pthread_mutex_unlock(&update_mutex);
 
     int ret = system("git pull origin main > update.log 2>&1");
     if (ret != 0) {
         pthread_mutex_lock(&update_mutex);
         update_failed = true;
+        strncpy(update_status_text, "Failed to pull from repository.", sizeof(update_status_text) - 1);
+        update_status_text[sizeof(update_status_text) - 1] = '\0';
         pthread_mutex_unlock(&update_mutex);
         SetUpdateStatus("Failed to pull from repository.");
         return NULL;
     }
 
-    SetUpdateStatus("Compiling targets...");
+    pthread_mutex_lock(&update_mutex);
+    strncpy(update_status_text, "Compiling targets...", sizeof(update_status_text) - 1);
+    update_status_text[sizeof(update_status_text) - 1] = '\0';
+    pthread_mutex_unlock(&update_mutex);
 
     ret = system("cmake -B build -DCMAKE_BUILD_TYPE=Release >> update.log 2>&1 && cmake --build build -j$(nproc) >> update.log 2>&1");
     if (ret != 0) {
         pthread_mutex_lock(&update_mutex);
         update_failed = true;
+        strncpy(update_status_text, "Compilation failed! Check update.log", sizeof(update_status_text) - 1);
+        update_status_text[sizeof(update_status_text) - 1] = '\0';
         pthread_mutex_unlock(&update_mutex);
         SetUpdateStatus("Compilation failed! Check update.log");
         return NULL;
     }
 
-    SetUpdateStatus("Finalizing assets...");
+    pthread_mutex_lock(&update_mutex);
+    strncpy(update_status_text, "Finalizing assets...", sizeof(update_status_text) - 1);
+    update_status_text[sizeof(update_status_text) - 1] = '\0';
     sleep(1); // Give it a brief moment to show success
 
     pthread_mutex_lock(&update_mutex);
@@ -1263,6 +1321,8 @@ int main(void) {
                     current_state = STATE_DASHBOARD;
                     update_in_progress = false;
                     update_failed = false;
+                    strncpy(update_status_text, "Initializing...", sizeof(update_status_text) - 1);
+                    update_status_text[sizeof(update_status_text) - 1] = '\0';
                     pthread_mutex_unlock(&update_mutex);
                     SetUpdateStatus("Initializing...");
                 }
@@ -1597,7 +1657,7 @@ int main(void) {
                     Rectangle glow_rect = { rect.x - 8, rect.y - 8, rect.width + 16, rect.height + 16 };
                     DrawRectangleRounded(glow_rect, 0.15f, 32, Fade(COLOR_ACCENT, 0.4f));
                     DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_FOCUS);
-                    DrawRectangleRoundedLinesEx(rect, 0.15f, 32, 2.0f, COLOR_ACCENT); // micro-border
+                    DrawRectangleRoundedLines(rect, 0.15f, 32, 2.0f, COLOR_ACCENT); // micro-border
                 } else {
                     DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_IDLE);
                 }
@@ -1639,7 +1699,7 @@ int main(void) {
             right_anchor -= 60;
             if (topbar_selection == 1) {
                 DrawRectangleRounded(settings_rect, 0.15f, 16, COLOR_CARD_FOCUS);
-                DrawRectangleRoundedLinesEx(settings_rect, 0.15f, 16, 2.0f, COLOR_ACCENT);
+                DrawRectangleRoundedLines(settings_rect, 0.15f, 16, 2.0f, COLOR_ACCENT);
 
                 int sw = MeasureText("Settings", 20);
                 Rectangle tooltip_rect = { settings_rect.x + settings_rect.width / 2.0f - sw / 2.0f - 10, settings_rect.y + settings_rect.height + 10, sw + 20, 30 };
@@ -1671,7 +1731,7 @@ int main(void) {
 
             if (topbar_selection == 0) {
                 DrawRectangleRounded(profile_rect, 0.15f, 16, COLOR_CARD_FOCUS);
-                DrawRectangleRoundedLinesEx(profile_rect, 0.15f, 16, 2.0f, COLOR_ACCENT);
+                DrawRectangleRoundedLines(profile_rect, 0.15f, 16, 2.0f, COLOR_ACCENT);
 
                 int pw = MeasureText(username_disp, 20);
                 Rectangle tooltip_rect = { profile_rect.x + profile_rect.width / 2.0f - pw / 2.0f - 10, profile_rect.y + profile_rect.height + 10, pw + 20, 30 };
@@ -1747,17 +1807,28 @@ int main(void) {
             // Quick Action Dock
             const char* dock_items[] = { "Library", "Settings", "Media", "Power" };
             int dock_item_count = 4;
-            int total_dock_width = 0;
-            for (int i=0; i<dock_item_count; i++) total_dock_width += MeasureText(dock_items[i], 20) + 60; // 60 for padding + spacing
-            int dock_x = (SCREEN_WIDTH - total_dock_width) / 2;
+
+            static int cached_dock_item_widths[4] = {0};
+            static int cached_total_dock_width = 0;
+            static bool dock_widths_cached = false;
+
+            if (!dock_widths_cached) {
+                for (int i=0; i<dock_item_count; i++) {
+                    cached_dock_item_widths[i] = MeasureText(dock_items[i], 20);
+                    cached_total_dock_width += cached_dock_item_widths[i] + 60; // 60 for padding + spacing
+                }
+                dock_widths_cached = true;
+            }
+
+            int dock_x = (SCREEN_WIDTH - cached_total_dock_width) / 2;
             int dock_y = SCREEN_HEIGHT - 120;
             for (int i=0; i<dock_item_count; i++) {
-                int iw = MeasureText(dock_items[i], 20);
+                int iw = cached_dock_item_widths[i];
                 Rectangle dock_rect = {dock_x, dock_y, iw + 40, 50};
 
                 if (i == dock_selection) {
                     DrawRectangleRounded(dock_rect, 0.5f, 16, COLOR_CARD_FOCUS);
-                    DrawRectangleRoundedLinesEx(dock_rect, 0.5f, 16, 2.0f, COLOR_ACCENT);
+                    DrawRectangleRoundedLines(dock_rect, 0.5f, 16, 2.0f, COLOR_ACCENT);
                     DrawText(dock_items[i], dock_x + 20, dock_y + 15, 20, COLOR_TEXT_MAIN);
                 } else {
                     DrawRectangleRounded(dock_rect, 0.5f, 16, COLOR_CARD_IDLE);
@@ -1797,7 +1868,7 @@ int main(void) {
                     Rectangle n_rect = { notif_drawer_x + 20, y_offset, (float)nw + 40, 40 };
 
                     DrawRectangleRounded(n_rect, 0.5f, 16, COLOR_CARD_FOCUS);
-                    DrawRectangleRoundedLinesEx(n_rect, 0.5f, 16, 2.0f, COLOR_ACCENT);
+                    DrawRectangleRoundedLines(n_rect, 0.5f, 16, 2.0f, COLOR_ACCENT);
                     DrawText(notifications[idx].message, notif_drawer_x + 40, y_offset + 10, 20, COLOR_TEXT_MAIN);
                 }
                 pthread_mutex_unlock(&notif_mutex);
@@ -1840,7 +1911,7 @@ int main(void) {
                 // Mute Row
                 Color r_color = (settings_row == 0 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
                 if (settings_row == 0) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
-                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLines((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
                 DrawText("Mute Master Audio", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 DrawRectangleRounded((Rectangle){right_x + max_w - 120, right_y - 5, 120, 40}, 1.0f, 32, bgm_muted ? COLOR_CARD_IDLE : COLOR_ACCENT);
@@ -1852,7 +1923,7 @@ int main(void) {
                 extern char* actual_audio_sinks[]; // Defined later
                 r_color = (settings_row == 1 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
                 if (settings_row == 1) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
-                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLines((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
                 DrawText("Output Device", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 const char* disp_name = (actual_audio_sink_count > 0 && active_audio_device < actual_audio_sink_count) ? actual_audio_sinks[active_audio_device] : audio_sinks[0];
@@ -1868,7 +1939,7 @@ int main(void) {
                 // Profile Row
                 Color r_color = (settings_row == 0 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
                 if (settings_row == 0) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
-                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+                if (settings_row == 0 && settings_focus_right_pane) DrawRectangleRoundedLines((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
                 DrawText("Active Profile", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 int pr_w = MeasureText(profile_names[(int)active_profile], 20);
                 DrawText(profile_names[(int)active_profile], right_x + max_w - pr_w - 20, right_y + 10, 20, (settings_row == 0 && settings_focus_right_pane) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
@@ -1877,7 +1948,7 @@ int main(void) {
                 // Test Row
                 r_color = (settings_row == 1 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
                 if (settings_row == 1) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
-                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLinesEx((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+                if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLines((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
                 DrawText("Test Controller Mapping", right_x, right_y, 24, COLOR_TEXT_MAIN);
                 DrawText("START >", right_x + max_w - 100, right_y + 10, 20, (settings_row == 1 && settings_focus_right_pane) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
             } else if (settings_tab == 2) { // System
@@ -1923,7 +1994,7 @@ int main(void) {
                 float modal_y = (SCREEN_HEIGHT - modal_h) / 2.0f;
 
                 DrawRectangleRounded((Rectangle){modal_x, modal_y, modal_w, modal_h}, 0.15f, 32, COLOR_CARD_IDLE);
-                DrawRectangleRoundedLinesEx((Rectangle){modal_x, modal_y, modal_w, modal_h}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+                DrawRectangleRoundedLines((Rectangle){modal_x, modal_y, modal_w, modal_h}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
                 DrawText("Select Layout", modal_x + modal_w/2 - MeasureText("Select Layout", 24)/2, modal_y + 20, 24, COLOR_TEXT_MAIN);
 
@@ -1956,12 +2027,16 @@ int main(void) {
                 Rectangle rect = { x, y, card_w, card_w };
                 if (i == active_user_index) {
                     DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_FOCUS);
-                    DrawRectangleRoundedLinesEx(rect, 0.15f, 32, 4.0f, COLOR_ACCENT);
+                    DrawRectangleRoundedLines(rect, 0.15f, 32, 4.0f, COLOR_ACCENT);
                 } else {
                     DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_IDLE);
                 }
 
-                int tw = MeasureText(users[i].username, 24);
+                if (users[i].username_width == -1) {
+                    users[i].username_width = MeasureText(users[i].username, 24);
+                }
+
+                int tw = users[i].username_width;
                 DrawText(users[i].username, x + card_w/2 - tw/2, y + card_w + 20, 24, (i == active_user_index) ? COLOR_TEXT_MAIN : COLOR_TEXT_MUTED);
             }
         } else if (render_state == STATE_CONTROLLER_TEST) {
@@ -1972,7 +2047,7 @@ int main(void) {
             float cy = SCREEN_HEIGHT / 2.0f;
 
             DrawRectangleRounded((Rectangle){cx - 400, cy - 300, 800, 600}, 0.15f, 32, COLOR_CARD_IDLE);
-            DrawRectangleRoundedLinesEx((Rectangle){cx - 400, cy - 300, 800, 600}, 0.15f, 32, 2.0f, COLOR_ACCENT);
+            DrawRectangleRoundedLines((Rectangle){cx - 400, cy - 300, 800, 600}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
             const char* gp_name_orig = IsGamepadAvailable(active_gamepad) ? GetGamepadName(active_gamepad) : "No Gamepad Detected";
             int nw = MeasureText(gp_name_orig, 24);
@@ -2009,7 +2084,7 @@ int main(void) {
             float sx = cx - 200;
             float sy = cy + 50;
             Rectangle stick_box = { sx - 60, sy - 60, 120, 120 };
-            DrawRectangleRoundedLinesEx(stick_box, 0.15f, 32, 2.0f, COLOR_TEXT_MUTED);
+            DrawRectangleRoundedLines(stick_box, 0.15f, 32, 2.0f, COLOR_TEXT_MUTED);
 
             float ax = GetGamepadAxisMovement(active_gamepad, GAMEPAD_AXIS_LEFT_X);
             float ay = GetGamepadAxisMovement(active_gamepad, GAMEPAD_AXIS_LEFT_Y);
@@ -2042,7 +2117,8 @@ int main(void) {
             pthread_mutex_lock(&update_mutex);
             bool failed = update_failed;
             char status_copy[256];
-            strcpy(status_copy, update_status_text);
+            strncpy(status_copy, update_status_text, sizeof(status_copy) - 1);
+            status_copy[sizeof(status_copy) - 1] = '\0';
             pthread_mutex_unlock(&update_mutex);
 
             if (!failed) {
@@ -2075,7 +2151,7 @@ int main(void) {
                 float py = SCREEN_HEIGHT / 2.0f - panel_h / 2.0f;
 
                 DrawRectangleRounded((Rectangle){ px, py, panel_w, panel_h }, 0.15f, 16, COLOR_CARD_IDLE);
-                DrawRectangleRoundedLinesEx((Rectangle){ px, py, panel_w, panel_h }, 0.15f, 16, 2.0f, COLOR_TEXT_MUTED);
+                DrawRectangleRoundedLines((Rectangle){ px, py, panel_w, panel_h }, 0.15f, 16, 2.0f, COLOR_TEXT_MUTED);
 
                 const char* title = "Game Paused";
                 int tw = MeasureText(title, 32);
