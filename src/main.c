@@ -448,7 +448,7 @@ void* BackendWorkerThread(void* arg) {
                                 if (cJSON_IsString(id)) strncpy(users[i].id, id->valuestring, sizeof(users[i].id)-1);
                                 if (cJSON_IsString(username)) {
                                     strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
-                                    users[i].username_width = -1; // Invalidate cache
+                                    users[i].username_width = 0; // Invalidate cache
                                 }
                                 if (cJSON_IsString(avatar)) {
                                     if (avatar->valuestring[0] == '/') {
@@ -1742,7 +1742,9 @@ int main(void) {
             pthread_mutex_unlock(&update_mutex);
             if (has_update) {
                 DrawRectangleRounded((Rectangle){SCREEN_WIDTH/2 - 100, 20, 200, 36}, 0.5f, 16, COLOR_ACCENT);
-                DrawText("Update Available", SCREEN_WIDTH/2 - MeasureText("Update Available", 20)/2, 28, 20, COLOR_BG);
+                static int ua_w = 0;
+                if (ua_w == 0) ua_w = MeasureText("Update Available", 20);
+                DrawText("Update Available", SCREEN_WIDTH/2 - ua_w/2, 28, 20, COLOR_BG);
             }
 
             // Quick Action Dock
@@ -1781,7 +1783,8 @@ int main(void) {
             // Status Badge and Action Prompt for Main Content
             if (image_count > 0 && current_selection < image_count) {
                 const char* status_badge = "Ready to Play";
-                int sw = MeasureText(status_badge, 22);
+                static int sw = 0;
+                if (sw == 0) sw = MeasureText(status_badge, 22);
                 DrawText(status_badge, SCREEN_WIDTH / 2 - sw / 2, SCREEN_HEIGHT / 2 + 300, 22, COLOR_ACCENT);
             }
 
@@ -1790,7 +1793,17 @@ int main(void) {
             if (active_profile == PROFILE_PS5) {
                 legend = "(✖) Select   (⭘) Back   (◼) Notifications   (▲) Check Updates";
             }
-            int legend_width = MeasureText(legend, 20);
+            // For legend, we can cache per string or simply re-measure since it can toggle, but let's cache both.
+            static int lw_xbox = 0;
+            static int lw_ps5 = 0;
+            int legend_width = 0;
+            if (active_profile == PROFILE_PS5) {
+                if (lw_ps5 == 0) lw_ps5 = MeasureText(legend, 20);
+                legend_width = lw_ps5;
+            } else {
+                if (lw_xbox == 0) lw_xbox = MeasureText(legend, 20);
+                legend_width = lw_xbox;
+            }
             DrawText(legend, (SCREEN_WIDTH - legend_width) / 2, SCREEN_HEIGHT - 40, 20, COLOR_TEXT_MUTED);
 
             // Notification Drawer
@@ -1923,7 +1936,8 @@ int main(void) {
             }
 
             const char* legend = "(Up/Down) Select Item   (Left/Right) Change Tab / Option   (A) Confirm   (B) Back";
-            int lw = MeasureText(legend, 20);
+            static int lw = 0;
+            if (lw == 0) lw = MeasureText(legend, 20);
             DrawText(legend, (SCREEN_WIDTH - lw) / 2, SCREEN_HEIGHT - 40, 20, COLOR_TEXT_MUTED);
 
             if (show_profile_dropdown) {
@@ -1937,7 +1951,9 @@ int main(void) {
                 DrawRectangleRounded((Rectangle){modal_x, modal_y, modal_w, modal_h}, 0.15f, 32, COLOR_CARD_IDLE);
                 DrawRectangleRoundedLines((Rectangle){modal_x, modal_y, modal_w, modal_h}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
-                DrawText("Select Layout", modal_x + modal_w/2 - MeasureText("Select Layout", 24)/2, modal_y + 20, 24, COLOR_TEXT_MAIN);
+                static int sl_w = 0;
+                if (sl_w == 0) sl_w = MeasureText("Select Layout", 24);
+                DrawText("Select Layout", modal_x + modal_w/2 - sl_w/2, modal_y + 20, 24, COLOR_TEXT_MAIN);
 
                 const char* dropdown_names[] = { "Sony DualSense (PS5)", "Xbox / Standard", "Legacy DirectInput" };
 
@@ -1955,7 +1971,9 @@ int main(void) {
 
         } else if (render_state == STATE_PROFILE_SELECT) {
             DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_BG);
-            DrawText("Who is playing?", SCREEN_WIDTH / 2 - MeasureText("Who is playing?", 40) / 2, 200, 40, COLOR_TEXT_MAIN);
+            static int wip_w = 0;
+            if (wip_w == 0) wip_w = MeasureText("Who is playing?", 40);
+            DrawText("Who is playing?", SCREEN_WIDTH / 2 - wip_w / 2, 200, 40, COLOR_TEXT_MAIN);
 
             int card_w = 200;
             int spacing = 50;
@@ -1973,7 +1991,7 @@ int main(void) {
                     DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_IDLE);
                 }
 
-                if (users[i].username_width == -1) {
+                if (users[i].username_width <= 0) {
                     users[i].username_width = MeasureText(users[i].username, 24);
                 }
 
@@ -2051,7 +2069,8 @@ int main(void) {
             DrawText("R2/RT", cx + 260, cy - 180, 20, COLOR_TEXT_MUTED);
 
             const char* legend = "(B/Circle) or (ESC/Guide) Return";
-            int lw = MeasureText(legend, 20);
+            static int lw = 0;
+            if (lw == 0) lw = MeasureText(legend, 20);
             DrawText(legend, cx - lw / 2, SCREEN_HEIGHT - 40, 20, COLOR_TEXT_MUTED);
 
         } else if (render_state == STATE_UPDATING) {
@@ -2071,13 +2090,15 @@ int main(void) {
                 int sw = MeasureText(status_copy, 30);
                 DrawText(status_copy, SCREEN_WIDTH / 2 - sw / 2, SCREEN_HEIGHT / 2 + 100, 30, COLOR_TEXT_MAIN);
             } else {
-                int ew = MeasureText("UPDATE FAILED", 40);
+                static int ew = 0;
+                if (ew == 0) ew = MeasureText("UPDATE FAILED", 40);
                 DrawText("UPDATE FAILED", SCREEN_WIDTH / 2 - ew / 2, SCREEN_HEIGHT / 2 - 50, 40, COLOR_ERROR);
                 int sw = MeasureText(status_copy, 24);
                 DrawText(status_copy, SCREEN_WIDTH / 2 - sw / 2, SCREEN_HEIGHT / 2 + 10, 24, COLOR_TEXT_MUTED);
 
                 const char* back_msg = "Press (B) or ESC to return to Dashboard";
-                int bw = MeasureText(back_msg, 20);
+                static int bw = 0;
+                if (bw == 0) bw = MeasureText(back_msg, 20);
                 DrawText(back_msg, SCREEN_WIDTH / 2 - bw / 2, SCREEN_HEIGHT / 2 + 80, 20, COLOR_TEXT_MAIN);
             }
         } else if (render_state == STATE_INGAME) {
@@ -2095,13 +2116,16 @@ int main(void) {
                 DrawRectangleRoundedLines((Rectangle){ px, py, panel_w, panel_h }, 0.15f, 16, 2.0f, COLOR_TEXT_MUTED);
 
                 const char* title = "Game Paused";
-                int tw = MeasureText(title, 32);
+                static int tw = 0;
+                if (tw == 0) tw = MeasureText(title, 32);
                 DrawText(title, px + panel_w/2 - tw/2, py + 30, 32, COLOR_TEXT_MAIN);
 
                 const char* opt1 = "Resume";
                 const char* opt2 = "Exit Game";
-                int o1w = MeasureText(opt1, 24);
-                int o2w = MeasureText(opt2, 24);
+                static int o1w = 0;
+                if (o1w == 0) o1w = MeasureText(opt1, 24);
+                static int o2w = 0;
+                if (o2w == 0) o2w = MeasureText(opt2, 24);
 
                 Color c1 = (overlay_selection_global == 0) ? COLOR_ACCENT : COLOR_TEXT_MUTED;
                 Color c2 = (overlay_selection_global == 1) ? COLOR_ACCENT : COLOR_TEXT_MUTED;
