@@ -460,55 +460,19 @@ void* BackendWorkerThread(void* arg) {
                             }
                             pthread_mutex_unlock(&backend_mutex);
                         }
-                        if (json != NULL) cJSON_Delete(json);
                     }
-                }
-                free(chunk.memory);
-                curl_easy_cleanup(curl);
-            }
-        }
+                    pthread_mutex_unlock(&backend_mutex);
 
-        if (games_fetch_pending && strlen(active_user_id) > 0) {
-            games_fetch_pending = false;
-            curl = curl_easy_init();
-            if (curl) {
-                struct MemoryStruct chunk;
-                chunk.memory = malloc(1);
-                chunk.size = 0;
+                    for (int i = 0; i < num_games; i++) {
+                        cJSON *item = cJSON_GetArrayItem(json, i);
+                        cJSON *cover_url = cJSON_GetObjectItemCaseSensitive(item, "cover_url");
+                        if (cJSON_IsString(cover_url)) {
 
-                char url[256];
-                snprintf(url, sizeof(url), "%s/api/v1/games?user=%s", base_url, active_user_id);
-                curl_easy_setopt(curl, CURLOPT_URL, url);
-                curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-                curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-                curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-
-                res = curl_easy_perform(curl);
-                if (res == CURLE_OK) {
-                    long response_code;
-                    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-                    if (response_code == 200) {
-                        cJSON *json = cJSON_Parse(chunk.memory);
-                        if (json != NULL && cJSON_IsArray(json)) {
-                            int num_games = cJSON_GetArraySize(json);
-                            if (num_games > MAX_GAMES) num_games = MAX_GAMES;
-
-                            pthread_mutex_lock(&backend_mutex);
-                            game_count = num_games;
-
-                            for (int i = 0; i < num_games; i++) {
-                                cJSON *item = cJSON_GetArrayItem(json, i);
-                                cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "id");
-                                cJSON *title = cJSON_GetObjectItemCaseSensitive(item, "title");
-                                cJSON *launch_path = cJSON_GetObjectItemCaseSensitive(item, "launch_path");
-                                cJSON *cover_url = cJSON_GetObjectItemCaseSensitive(item, "cover_url");
-
-                                if (cJSON_IsString(id)) strncpy(games[i].id, id->valuestring, sizeof(games[i].id) - 1);
-                                if (cJSON_IsString(title)) strncpy(games[i].title, title->valuestring, sizeof(games[i].title) - 1);
-                                if (cJSON_IsString(launch_path)) strncpy(games[i].launch_path, launch_path->valuestring, sizeof(games[i].launch_path) - 1);
-                                if (cJSON_IsString(cover_url)) {
-                                    strncpy(games[i].cover_url, cover_url->valuestring, sizeof(games[i].cover_url) - 1);
-                                }
+                            char cover_full_url[512];
+                            if (cover_url->valuestring[0] == '/') {
+                                snprintf(cover_full_url, sizeof(cover_full_url), "http://192.168.222.181:8080%s", cover_url->valuestring);
+                            } else {
+                                snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", base_url, cover_url->valuestring);
                             }
                             pthread_mutex_unlock(&backend_mutex);
 
@@ -524,168 +488,251 @@ void* BackendWorkerThread(void* arg) {
                                         snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", base_url, cover_url->valuestring);
                                     }
 
-                                    char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
+                            char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
 
-                                    char local_path[512];
-                                    snprintf(local_path, sizeof(local_path), "%s/covers/%s.png", cache_dir, games[i].id);
+                            char local_path[512];
+                            snprintf(local_path, sizeof(local_path), "%s/covers/%s.png", cache_dir, games[i].id);
 
-                                    games[i].cover_downloaded = false;
-                                    games[i].cover_failed = false;
+                            games[i].cover_downloaded = false;
+                            games[i].cover_failed = false;
 
-                                    FILE *fp = fopen(local_path, "wb");
-                                    if (fp) {
-                                        CURL *curl_dl = curl_easy_init();
-                                        if (curl_dl) {
-                                            curl_easy_setopt(curl_dl, CURLOPT_URL, cover_full_url);
-                                            curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
-                                            curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
-                                            CURLcode dl_res = curl_easy_perform(curl_dl);
-                                            long response_code = 0;
-                                            curl_easy_getinfo(curl_dl, CURLINFO_RESPONSE_CODE, &response_code);
-                                            if (dl_res == CURLE_OK && response_code == 200) {
-                                                pthread_mutex_lock(&backend_mutex);
-                                                games[i].cover_downloaded = true;
-                                                pthread_mutex_unlock(&backend_mutex);
-                                            } else {
-                                                pthread_mutex_lock(&backend_mutex);
-                                                games[i].cover_failed = true;
-                                                pthread_mutex_unlock(&backend_mutex);
-                                            }
-                                            curl_easy_cleanup(curl_dl);
-                                        } else {
-                                            pthread_mutex_lock(&backend_mutex);
-                                            games[i].cover_failed = true;
-                                            pthread_mutex_unlock(&backend_mutex);
-                                        }
-                                        fclose(fp);
+                            FILE *fp = fopen(local_path, "wb");
+                            if (fp) {
+                                CURL *curl_dl = curl_easy_init();
+                                if (curl_dl) {
+                                    curl_easy_setopt(curl_dl, CURLOPT_URL, cover_full_url);
+                                    curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
+                                    curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
+                                    CURLcode dl_res = curl_easy_perform(curl_dl);
+                                    long response_code_dl = 0;
+                                    curl_easy_getinfo(curl_dl, CURLINFO_RESPONSE_CODE, &response_code_dl);
+                                    if (dl_res == CURLE_OK && response_code_dl == 200) {
                                         pthread_mutex_lock(&backend_mutex);
-                                        if (games[i].cover_failed) {
-                                            unlink(local_path);
-                                        }
+                                        games[i].cover_downloaded = true;
                                         pthread_mutex_unlock(&backend_mutex);
                                     } else {
                                         pthread_mutex_lock(&backend_mutex);
                                         games[i].cover_failed = true;
                                         pthread_mutex_unlock(&backend_mutex);
                                     }
+                                    curl_easy_cleanup(curl_dl);
+                                } else {
+                                    pthread_mutex_lock(&backend_mutex);
+                                    games[i].cover_failed = true;
+                                    pthread_mutex_unlock(&backend_mutex);
                                 }
-                            }
-                            pthread_mutex_lock(&backend_mutex);
-                            cover_download_pending = true;
-                            pthread_mutex_unlock(&backend_mutex);
-                        }
-                        if (json != NULL) cJSON_Delete(json);
-                    }
-                }
-                if (chunk.memory) free(chunk.memory);
-                if (curl) curl_easy_cleanup(curl);
-            }
-        }
-
-        if (avatar_fetch_pending && strlen(avatar_download_url) > 0) {
-            avatar_fetch_pending = false;
-            char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
-
-            char local_path[512];
-            snprintf(local_path, sizeof(local_path), "%s/avatars/%s.png", cache_dir, active_user_id);
-            avatar_download_success = false;
-            avatar_download_failed = false;
-
-            FILE *fp = fopen(local_path, "wb");
-            if (fp) {
-                 CURL *curl_dl = curl_easy_init();
-                 if (curl_dl) {
-                     curl_easy_setopt(curl_dl, CURLOPT_URL, avatar_download_url);
-                     curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
-                     curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
-                     CURLcode dl_res = curl_easy_perform(curl_dl);
-                     long response_code = 0;
-                     curl_easy_getinfo(curl_dl, CURLINFO_RESPONSE_CODE, &response_code);
-                     if (dl_res == CURLE_OK && response_code == 200) {
-                         pthread_mutex_lock(&backend_mutex);
-                         avatar_download_success = true;
-                         pthread_mutex_unlock(&backend_mutex);
-                     } else {
-                         pthread_mutex_lock(&backend_mutex);
-                         avatar_download_failed = true;
-                         pthread_mutex_unlock(&backend_mutex);
-                     }
-                     curl_easy_cleanup(curl_dl);
-                 } else {
-                     pthread_mutex_lock(&backend_mutex);
-                     avatar_download_failed = true;
-                     pthread_mutex_unlock(&backend_mutex);
-                 }
-                 fclose(fp);
-                 pthread_mutex_lock(&backend_mutex);
-                 if (avatar_download_failed) {
-                     unlink(local_path);
-                 }
-                 pthread_mutex_unlock(&backend_mutex);
-
-                 pthread_mutex_lock(&backend_mutex);
-                 avatar_download_pending = true;
-                 pthread_mutex_unlock(&backend_mutex);
-            } else {
-                pthread_mutex_lock(&backend_mutex);
-                avatar_download_failed = true;
-                pthread_mutex_unlock(&backend_mutex);
-            }
-        }
-
-        curl = curl_easy_init();
-        if(curl) {
-            struct MemoryStruct chunk;
-            chunk.memory = malloc(1);
-            chunk.size = 0;
-
-            char url[256];
-            snprintf(url, sizeof(url), "%s/api/v1/system/status", base_url);
-            curl_easy_setopt(curl, CURLOPT_URL, url);
-            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-            curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
-
-            res = curl_easy_perform(curl);
-
-            bool connected = false;
-            long long tb = 0, fb = 0;
-
-            if(res == CURLE_OK) {
-                long response_code;
-                curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-                if (response_code == 200) {
-                    cJSON *json = cJSON_Parse(chunk.memory);
-                    if (json != NULL) {
-                        connected = true;
-                        cJSON *pools = cJSON_GetObjectItemCaseSensitive(json, "storage_pools");
-                        if (cJSON_IsArray(pools)) {
-                            cJSON *pool = cJSON_GetArrayItem(pools, 0);
-                            if (pool != NULL) {
-                                cJSON *total = cJSON_GetObjectItemCaseSensitive(pool, "total_bytes");
-                                cJSON *free_b = cJSON_GetObjectItemCaseSensitive(pool, "free_bytes");
-                                if (cJSON_IsNumber(total) && cJSON_IsNumber(free_b)) {
-                                    tb = (long long)total->valuedouble;
-                                    fb = (long long)free_b->valuedouble;
+                                fclose(fp);
+                                pthread_mutex_lock(&backend_mutex);
+                                if (games[i].cover_failed) {
+                                    unlink(local_path);
                                 }
+                                pthread_mutex_unlock(&backend_mutex);
+                            } else {
+                                pthread_mutex_lock(&backend_mutex);
+                                games[i].cover_failed = true;
+                                pthread_mutex_unlock(&backend_mutex);
                             }
                         }
-                        cJSON_Delete(json);
                     }
+                    pthread_mutex_lock(&backend_mutex);
+                    cover_download_pending = true;
+                    pthread_mutex_unlock(&backend_mutex);
+                }
+                if (json != NULL) cJSON_Delete(json);
+            }
+        }
+        if (chunk.memory) free(chunk.memory);
+        if (curl) curl_easy_cleanup(curl);
+    }
+}
+
+static void FetchSystemStatus(const char* base_url) {
+    CURL *curl = curl_easy_init();
+    if (curl) {
+        struct MemoryStruct chunk;
+        chunk.memory = malloc(1);
+        chunk.size = 0;
+
+        char url[256];
+        snprintf(url, sizeof(url), "%s/api/v1/system/status", base_url);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
+
+        CURLcode res = curl_easy_perform(curl);
+
+        bool connected = false;
+        long long tb = 0, fb = 0;
+
+        if (res == CURLE_OK) {
+            long response_code;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+            if (response_code == 200) {
+                cJSON *json = cJSON_Parse(chunk.memory);
+                if (json != NULL) {
+                    connected = true;
+                    cJSON *pools = cJSON_GetObjectItemCaseSensitive(json, "storage_pools");
+                    if (cJSON_IsArray(pools)) {
+                        cJSON *pool = cJSON_GetArrayItem(pools, 0);
+                        if (pool != NULL) {
+                            cJSON *total = cJSON_GetObjectItemCaseSensitive(pool, "total_bytes");
+                            cJSON *free_b = cJSON_GetObjectItemCaseSensitive(pool, "free_bytes");
+                            if (cJSON_IsNumber(total) && cJSON_IsNumber(free_b)) {
+                                tb = (long long)total->valuedouble;
+                                fb = (long long)free_b->valuedouble;
+                            }
+                        }
+                    }
+                    cJSON_Delete(json);
                 }
             }
-
-            pthread_mutex_lock(&backend_mutex);
-            system_connected = connected;
-            if (connected) {
-                total_bytes = tb;
-                free_bytes = fb;
-            }
-            pthread_mutex_unlock(&backend_mutex);
-
-            free(chunk.memory);
-            curl_easy_cleanup(curl);
         }
+
+        pthread_mutex_lock(&backend_mutex);
+        system_connected = connected;
+        if (connected) {
+            total_bytes = tb;
+            free_bytes = fb;
+        }
+        pthread_mutex_unlock(&backend_mutex);
+
+        free(chunk.memory);
+        curl_easy_cleanup(curl);
+    }
+}
+
+static void FetchAvatar(void) {
+    if (!avatar_fetch_pending || strlen(avatar_download_url) == 0) return;
+
+    avatar_fetch_pending = false;
+    char cache_dir[256]; GetCacheDir(cache_dir, sizeof(cache_dir));
+
+    char local_path[512];
+    snprintf(local_path, sizeof(local_path), "%s/avatars/%s.png", cache_dir, active_user_id);
+    avatar_download_success = false;
+    avatar_download_failed = false;
+
+    FILE *fp = fopen(local_path, "wb");
+    if (fp) {
+         CURL *curl_dl = curl_easy_init();
+         if (curl_dl) {
+             curl_easy_setopt(curl_dl, CURLOPT_URL, avatar_download_url);
+             curl_easy_setopt(curl_dl, CURLOPT_WRITEFUNCTION, NULL);
+             curl_easy_setopt(curl_dl, CURLOPT_WRITEDATA, fp);
+             CURLcode dl_res = curl_easy_perform(curl_dl);
+             long response_code = 0;
+             curl_easy_getinfo(curl_dl, CURLINFO_RESPONSE_CODE, &response_code);
+             if (dl_res == CURLE_OK && response_code == 200) {
+                 pthread_mutex_lock(&backend_mutex);
+                 avatar_download_success = true;
+                 pthread_mutex_unlock(&backend_mutex);
+             } else {
+                 pthread_mutex_lock(&backend_mutex);
+                 avatar_download_failed = true;
+                 pthread_mutex_unlock(&backend_mutex);
+             }
+             curl_easy_cleanup(curl_dl);
+         } else {
+             pthread_mutex_lock(&backend_mutex);
+             avatar_download_failed = true;
+             pthread_mutex_unlock(&backend_mutex);
+         }
+         fclose(fp);
+         pthread_mutex_lock(&backend_mutex);
+         if (avatar_download_failed) {
+             unlink(local_path);
+         }
+         pthread_mutex_unlock(&backend_mutex);
+
+         pthread_mutex_lock(&backend_mutex);
+         avatar_download_pending = true;
+         pthread_mutex_unlock(&backend_mutex);
+    } else {
+        pthread_mutex_lock(&backend_mutex);
+        avatar_download_failed = true;
+        pthread_mutex_unlock(&backend_mutex);
+    }
+}
+
+static void FetchUsers(const char* base_url) {
+    if (!users_fetch_pending) return;
+
+    users_fetch_pending = false;
+    CURL *curl = curl_easy_init();
+    if(curl) {
+        struct MemoryStruct chunk;
+        chunk.memory = malloc(1);
+        chunk.size = 0;
+
+        char url[256];
+        snprintf(url, sizeof(url), "%s/api/v1/users", base_url);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+
+        CURLcode res = curl_easy_perform(curl);
+        if(res == CURLE_OK) {
+            long response_code;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+            if (response_code == 200) {
+                cJSON *json = cJSON_Parse(chunk.memory);
+                if (json != NULL && cJSON_IsArray(json)) {
+                    int num_users = cJSON_GetArraySize(json);
+                    if (num_users > MAX_USERS) num_users = MAX_USERS;
+                    pthread_mutex_lock(&backend_mutex);
+                    user_count = num_users;
+                    for (int i = 0; i < num_users; i++) {
+                        cJSON *item = cJSON_GetArrayItem(json, i);
+                        cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "id");
+                        cJSON *username = cJSON_GetObjectItemCaseSensitive(item, "username");
+                        cJSON *avatar = cJSON_GetObjectItemCaseSensitive(item, "avatar_url");
+                        if (cJSON_IsString(id)) strncpy(users[i].id, id->valuestring, sizeof(users[i].id)-1);
+                        if (cJSON_IsString(username)) strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
+                        if (cJSON_IsString(avatar)) {
+                            if (avatar->valuestring[0] == '/') {
+                                snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "http://192.168.222.181:8080%s", avatar->valuestring);
+                            } else {
+                                snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "%s%s", base_url, avatar->valuestring);
+                            }
+                        }
+                    }
+                    pthread_mutex_unlock(&backend_mutex);
+                }
+                if (json != NULL) cJSON_Delete(json);
+            }
+        }
+        free(chunk.memory);
+        curl_easy_cleanup(curl);
+    }
+}
+
+void* BackendWorkerThread(void* arg) {
+    (void)arg;
+    CURL *curl;
+
+    char base_url[128] = "http://192.168.222.181:8080";
+
+    // Test primary endpoint, fallback if needed
+    curl = curl_easy_init();
+    if(curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.222.181:8080/api/v1/system/status");
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // HEAD request
+        if (curl_easy_perform(curl) != CURLE_OK) {
+            strcpy(base_url, "http://TowerServer.local:8080");
+        }
+        curl_easy_cleanup(curl);
+    }
+
+    while(1) {
+        FetchUsers(base_url);
+
+        FetchGames(base_url);
+        FetchAvatar();
+        FetchSystemStatus(base_url);
+
         sleep(2);
     }
     return NULL;
