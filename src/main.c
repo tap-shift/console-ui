@@ -227,6 +227,13 @@ bool update_success = false;
 bool update_failed = false;
 char update_status_text[256] = "Initializing...";
 
+void SetUpdateStatus(const char* text) {
+    pthread_mutex_lock(&update_mutex);
+    strncpy(update_status_text, text, sizeof(update_status_text) - 1);
+    update_status_text[sizeof(update_status_text) - 1] = '\0';
+    pthread_mutex_unlock(&update_mutex);
+}
+
 bool bgm_muted = false;
 
 bool game_running = false;
@@ -734,35 +741,32 @@ void* UpdateCheckerThread(void* arg) {
 void* UpdateInstallerThread(void* arg) {
     (void)arg;
 
-    pthread_mutex_lock(&update_mutex);
-    strcpy(update_status_text, "Fetching repository...");
-    pthread_mutex_unlock(&update_mutex);
+    SetUpdateStatus("Fetching repository...");
 
     int ret = system("git pull origin main > update.log 2>&1");
     if (ret != 0) {
         pthread_mutex_lock(&update_mutex);
         update_failed = true;
-        strcpy(update_status_text, "Failed to pull from repository.");
         pthread_mutex_unlock(&update_mutex);
+        SetUpdateStatus("Failed to pull from repository.");
         return NULL;
     }
 
-    pthread_mutex_lock(&update_mutex);
-    strcpy(update_status_text, "Compiling targets...");
-    pthread_mutex_unlock(&update_mutex);
+    SetUpdateStatus("Compiling targets...");
 
     ret = system("cmake -B build -DCMAKE_BUILD_TYPE=Release >> update.log 2>&1 && cmake --build build -j$(nproc) >> update.log 2>&1");
     if (ret != 0) {
         pthread_mutex_lock(&update_mutex);
         update_failed = true;
-        strcpy(update_status_text, "Compilation failed! Check update.log");
         pthread_mutex_unlock(&update_mutex);
+        SetUpdateStatus("Compilation failed! Check update.log");
         return NULL;
     }
 
-    pthread_mutex_lock(&update_mutex);
-    strcpy(update_status_text, "Finalizing assets...");
+    SetUpdateStatus("Finalizing assets...");
     sleep(1); // Give it a brief moment to show success
+
+    pthread_mutex_lock(&update_mutex);
     update_success = true;
     pthread_mutex_unlock(&update_mutex);
 
@@ -1259,8 +1263,8 @@ int main(void) {
                     current_state = STATE_DASHBOARD;
                     update_in_progress = false;
                     update_failed = false;
-                    strcpy(update_status_text, "Initializing...");
                     pthread_mutex_unlock(&update_mutex);
+                    SetUpdateStatus("Initializing...");
                 }
             }
         } else if (state_copy == STATE_SETTINGS) {
