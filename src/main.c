@@ -222,6 +222,13 @@ bool update_success = false;
 bool update_failed = false;
 char update_status_text[256] = "Initializing...";
 
+void SetUpdateStatus(const char* text) {
+    pthread_mutex_lock(&update_mutex);
+    strncpy(update_status_text, text, sizeof(update_status_text) - 1);
+    update_status_text[sizeof(update_status_text) - 1] = '\0';
+    pthread_mutex_unlock(&update_mutex);
+}
+
 bool bgm_muted = false;
 
 bool game_running = false;
@@ -792,6 +799,7 @@ void* UpdateInstallerThread(void* arg) {
         strncpy(update_status_text, "Failed to pull from repository.", sizeof(update_status_text) - 1);
         update_status_text[sizeof(update_status_text) - 1] = '\0';
         pthread_mutex_unlock(&update_mutex);
+        SetUpdateStatus("Failed to pull from repository.");
         return NULL;
     }
 
@@ -807,6 +815,7 @@ void* UpdateInstallerThread(void* arg) {
         strncpy(update_status_text, "Compilation failed! Check update.log", sizeof(update_status_text) - 1);
         update_status_text[sizeof(update_status_text) - 1] = '\0';
         pthread_mutex_unlock(&update_mutex);
+        SetUpdateStatus("Compilation failed! Check update.log");
         return NULL;
     }
 
@@ -814,6 +823,8 @@ void* UpdateInstallerThread(void* arg) {
     strncpy(update_status_text, "Finalizing assets...", sizeof(update_status_text) - 1);
     update_status_text[sizeof(update_status_text) - 1] = '\0';
     sleep(1); // Give it a brief moment to show success
+
+    pthread_mutex_lock(&update_mutex);
     update_success = true;
     pthread_mutex_unlock(&update_mutex);
 
@@ -1313,6 +1324,7 @@ int main(void) {
                     strncpy(update_status_text, "Initializing...", sizeof(update_status_text) - 1);
                     update_status_text[sizeof(update_status_text) - 1] = '\0';
                     pthread_mutex_unlock(&update_mutex);
+                    SetUpdateStatus("Initializing...");
                 }
             }
         } else if (state_copy == STATE_SETTINGS) {
