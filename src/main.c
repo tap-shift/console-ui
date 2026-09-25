@@ -175,6 +175,7 @@ int active_audio_device = 0;
 
 #define MAX_AUDIO_SINKS 16
 char* actual_audio_sinks[MAX_AUDIO_SINKS];
+char* display_audio_sinks[MAX_AUDIO_SINKS];
 int actual_audio_sink_count = 0;
 const char* audio_sinks[2] = {
     "Built-in Audio Analog Stereo",
@@ -182,19 +183,51 @@ const char* audio_sinks[2] = {
 };
 
 void PopulateAudioDevices() {
-    FILE* fp = popen("pactl list short sinks 2>/dev/null | awk '{print $2}'", "r");
+    FILE* fp = popen("pactl list sinks 2>/dev/null | awk -F': ' '/^[[:space:]]*Name:/ {name=$2} /^[[:space:]]*Description:/ {print name \"|\" $2}'", "r");
     if (fp != NULL) {
-        char buffer[256];
+        char buffer[512];
         while (fgets(buffer, sizeof(buffer), fp) != NULL && actual_audio_sink_count < MAX_AUDIO_SINKS) {
             buffer[strcspn(buffer, "\n")] = 0;
-            actual_audio_sinks[actual_audio_sink_count] = strdup(buffer);
 
-            // Prioritize analog output
-            if (strstr(buffer, "analog") != NULL || strstr(buffer, "alc") != NULL || strstr(buffer, "realtek") != NULL) {
-                active_audio_device = actual_audio_sink_count; // Set as default if matched
+            char* pipe_pos = strchr(buffer, '|');
+            if (pipe_pos) {
+                *pipe_pos = '\0';
+                char* raw_name = buffer;
+                char* raw_desc = pipe_pos + 1;
+
+                actual_audio_sinks[actual_audio_sink_count] = strdup(raw_name);
+
+                char clean_desc[256];
+                strncpy(clean_desc, raw_desc, sizeof(clean_desc) - 1);
+                clean_desc[sizeof(clean_desc) - 1] = '\0';
+
+                if (strstr(raw_desc, "HDMI") != NULL || strstr(raw_desc, "DisplayPort") != NULL) {
+                    strcpy(clean_desc, "HDMI / Display Audio");
+                } else if (strstr(raw_desc, "DualSense") != NULL || strstr(raw_desc, "Wireless Controller") != NULL) {
+                    strcpy(clean_desc, "DualSense Speaker");
+                } else if (strstr(raw_desc, "Headphone") != NULL) {
+                    strcpy(clean_desc, "Headphones");
+                } else {
+                    char* fluff1 = strstr(clean_desc, " Analog Stereo");
+                    if (fluff1) *fluff1 = '\0';
+                    char* fluff2 = strstr(clean_desc, " Digital Stereo");
+                    if (fluff2) *fluff2 = '\0';
+                    char* fluff3 = strstr(clean_desc, " Audio Controller");
+                    if (fluff3) *fluff3 = '\0';
+                    char* fluff4 = strstr(clean_desc, " Digital Stereo (HDMI)");
+                    if (fluff4) *fluff4 = '\0';
+                }
+
+                display_audio_sinks[actual_audio_sink_count] = strdup(clean_desc);
+
+                // Prioritize analog output
+                if (strstr(raw_desc, "analog") != NULL || strstr(raw_desc, "alc") != NULL || strstr(raw_desc, "realtek") != NULL ||
+                    strstr(raw_name, "analog") != NULL || strstr(raw_name, "alc") != NULL || strstr(raw_name, "realtek") != NULL) {
+                    active_audio_device = actual_audio_sink_count; // Set as default if matched
+                }
+
+                actual_audio_sink_count++;
             }
-
-            actual_audio_sink_count++;
         }
         pclose(fp);
     }
@@ -1862,12 +1895,13 @@ int main(void) {
                 // Sink Row
                 extern int actual_audio_sink_count; // Defined later
                 extern char* actual_audio_sinks[]; // Defined later
+                extern char* display_audio_sinks[]; // Defined later
                 r_color = (settings_row == 1 && settings_focus_right_pane) ? COLOR_CARD_FOCUS : COLOR_CARD_IDLE;
                 if (settings_row == 1) DrawRectangleRounded((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, r_color);
                 if (settings_row == 1 && settings_focus_right_pane) DrawRectangleRoundedLines((Rectangle){right_x-10, right_y-10, max_w+20, 60}, 0.15f, 32, 2.0f, COLOR_ACCENT);
 
                 DrawText("Output Device", right_x, right_y, 24, COLOR_TEXT_MAIN);
-                const char* disp_name = (actual_audio_sink_count > 0 && active_audio_device < actual_audio_sink_count) ? actual_audio_sinks[active_audio_device] : audio_sinks[0];
+                const char* disp_name = (actual_audio_sink_count > 0 && active_audio_device < actual_audio_sink_count) ? display_audio_sinks[active_audio_device] : audio_sinks[0];
                 int dev_w = MeasureText(disp_name, 20);
                 DrawText(disp_name, right_x + max_w - dev_w - 20, right_y + 10, 20, (settings_row == 1 && settings_focus_right_pane) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
 
