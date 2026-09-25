@@ -360,7 +360,7 @@ void* SaveSyncThread(void* arg) {
         // Upload
         CURL *curl = curl_easy_init();
         if (curl) {
-            char url[256] = "http://192.168.222.181:8080/api/v1/saves/sync";
+            char url[256] = "https://192.168.222.181:8080/api/v1/saves/sync";
             curl_mime *form = curl_mime_init(curl);
             curl_mimepart *field;
 
@@ -395,16 +395,16 @@ void* BackendWorkerThread(void* arg) {
     CURL *curl;
     CURLcode res;
 
-    char base_url[128] = "http://192.168.222.181:8080";
+    char base_url[128] = "https://192.168.222.181:8080";
 
     // Test primary endpoint, fallback if needed
     curl = curl_easy_init();
     if(curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.222.181:8080/api/v1/system/status");
+        curl_easy_setopt(curl, CURLOPT_URL, "https://192.168.222.181:8080/api/v1/system/status");
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // HEAD request
         if (curl_easy_perform(curl) != CURLE_OK) {
-            strcpy(base_url, "http://TowerServer.local:8080");
+            strcpy(base_url, "https://TowerServer.local:8080");
         }
         curl_easy_cleanup(curl);
     }
@@ -445,7 +445,7 @@ void* BackendWorkerThread(void* arg) {
                                 if (cJSON_IsString(username)) strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
                                 if (cJSON_IsString(avatar)) {
                                     if (avatar->valuestring[0] == '/') {
-                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "http://192.168.222.181:8080%s", avatar->valuestring);
+                                        snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "https://192.168.222.181:8080%s", avatar->valuestring);
                                     } else {
                                         snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "%s%s", base_url, avatar->valuestring);
                                     }
@@ -512,7 +512,7 @@ void* BackendWorkerThread(void* arg) {
 
                                     char cover_full_url[512];
                                     if (cover_url->valuestring[0] == '/') {
-                                        snprintf(cover_full_url, sizeof(cover_full_url), "http://192.168.222.181:8080%s", cover_url->valuestring);
+                                        snprintf(cover_full_url, sizeof(cover_full_url), "https://192.168.222.181:8080%s", cover_url->valuestring);
                                     } else {
                                         snprintf(cover_full_url, sizeof(cover_full_url), "%s%s", base_url, cover_url->valuestring);
                                     }
