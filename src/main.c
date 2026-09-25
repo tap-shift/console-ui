@@ -130,7 +130,6 @@ int game_count = 0;
 bool system_connected = false;
 long long total_bytes = 0;
 long long free_bytes = 0;
-char profile_username[128] = "";
 bool cover_download_pending = false;
 bool avatar_download_pending = false;
 
