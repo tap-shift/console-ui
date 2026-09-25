@@ -151,6 +151,7 @@ typedef struct {
     char id[64];
     char username[128];
     char avatar_url[256];
+    int username_width;
 } User;
 
 #define MAX_USERS 16
@@ -443,7 +444,10 @@ void* BackendWorkerThread(void* arg) {
                                 cJSON *username = cJSON_GetObjectItemCaseSensitive(item, "username");
                                 cJSON *avatar = cJSON_GetObjectItemCaseSensitive(item, "avatar_url");
                                 if (cJSON_IsString(id)) strncpy(users[i].id, id->valuestring, sizeof(users[i].id)-1);
-                                if (cJSON_IsString(username)) strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
+                                if (cJSON_IsString(username)) {
+                                    strncpy(users[i].username, username->valuestring, sizeof(users[i].username)-1);
+                                    users[i].username_width = -1; // Invalidate cache
+                                }
                                 if (cJSON_IsString(avatar)) {
                                     if (avatar->valuestring[0] == '/') {
                                         snprintf(users[i].avatar_url, sizeof(users[i].avatar_url), "http://192.168.222.181:8080%s", avatar->valuestring);
@@ -1950,7 +1954,11 @@ int main(void) {
                     DrawRectangleRounded(rect, 0.15f, 32, COLOR_CARD_IDLE);
                 }
 
-                int tw = MeasureText(users[i].username, 24);
+                if (users[i].username_width == -1) {
+                    users[i].username_width = MeasureText(users[i].username, 24);
+                }
+
+                int tw = users[i].username_width;
                 DrawText(users[i].username, x + card_w/2 - tw/2, y + card_w + 20, 24, (i == active_user_index) ? COLOR_TEXT_MAIN : COLOR_TEXT_MUTED);
             }
         } else if (render_state == STATE_CONTROLLER_TEST) {
