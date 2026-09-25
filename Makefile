@@ -11,14 +11,18 @@ $(TARGET): $(SRC)
 	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET) test_parse test_cache_dir
+	rm -f $(TARGET) test_parse test_cache_dir test_config_dir
 
-test: test_parse test_cache_dir
+test: test_parse test_cache_dir test_config_dir
 	./test_parse
 	./test_cache_dir
+	./test_config_dir
 
 test_parse: test_parse.c
 	$(CC) $(CFLAGS) -o test_parse test_parse.c $(LDFLAGS)
 
 test_cache_dir: test_cache_dir.c
 	$(CC) $(CFLAGS) -o test_cache_dir test_cache_dir.c $(LDFLAGS)
+
+test_config_dir: test_config_dir.c
+	$(CC) $(CFLAGS) -o test_config_dir test_config_dir.c $(LDFLAGS)
