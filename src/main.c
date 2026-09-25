@@ -453,8 +453,8 @@ void* BackendWorkerThread(void* arg) {
                                 }
                             }
                             pthread_mutex_unlock(&backend_mutex);
-                            cJSON_Delete(json);
                         }
+                        if (json != NULL) cJSON_Delete(json);
                     }
                 }
                 free(chunk.memory);
@@ -564,11 +564,11 @@ void* BackendWorkerThread(void* arg) {
                                     }
                                 }
                             }
-                            cJSON_Delete(json);
                             pthread_mutex_lock(&backend_mutex);
                             cover_download_pending = true;
                             pthread_mutex_unlock(&backend_mutex);
                         }
+                        if (json != NULL) cJSON_Delete(json);
                     }
                 }
                 if (chunk.memory) free(chunk.memory);
