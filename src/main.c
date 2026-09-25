@@ -412,7 +412,8 @@ void* BackendWorkerThread(void* arg) {
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // HEAD request
         if (curl_easy_perform(curl) != CURLE_OK) {
-            strcpy(base_url, "http://TowerServer.local:8080");
+            strncpy(base_url, "http://TowerServer.local:8080", sizeof(base_url) - 1);
+            base_url[sizeof(base_url) - 1] = '\0';
         }
         curl_easy_cleanup(curl);
     }
@@ -735,33 +736,38 @@ void* UpdateInstallerThread(void* arg) {
     (void)arg;
 
     pthread_mutex_lock(&update_mutex);
-    strcpy(update_status_text, "Fetching repository...");
+    strncpy(update_status_text, "Fetching repository...", sizeof(update_status_text) - 1);
+    update_status_text[sizeof(update_status_text) - 1] = '\0';
     pthread_mutex_unlock(&update_mutex);
 
     int ret = system("git pull origin main > update.log 2>&1");
     if (ret != 0) {
         pthread_mutex_lock(&update_mutex);
         update_failed = true;
-        strcpy(update_status_text, "Failed to pull from repository.");
+        strncpy(update_status_text, "Failed to pull from repository.", sizeof(update_status_text) - 1);
+        update_status_text[sizeof(update_status_text) - 1] = '\0';
         pthread_mutex_unlock(&update_mutex);
         return NULL;
     }
 
     pthread_mutex_lock(&update_mutex);
-    strcpy(update_status_text, "Compiling targets...");
+    strncpy(update_status_text, "Compiling targets...", sizeof(update_status_text) - 1);
+    update_status_text[sizeof(update_status_text) - 1] = '\0';
     pthread_mutex_unlock(&update_mutex);
 
     ret = system("cmake -B build -DCMAKE_BUILD_TYPE=Release >> update.log 2>&1 && cmake --build build -j$(nproc) >> update.log 2>&1");
     if (ret != 0) {
         pthread_mutex_lock(&update_mutex);
         update_failed = true;
-        strcpy(update_status_text, "Compilation failed! Check update.log");
+        strncpy(update_status_text, "Compilation failed! Check update.log", sizeof(update_status_text) - 1);
+        update_status_text[sizeof(update_status_text) - 1] = '\0';
         pthread_mutex_unlock(&update_mutex);
         return NULL;
     }
 
     pthread_mutex_lock(&update_mutex);
-    strcpy(update_status_text, "Finalizing assets...");
+    strncpy(update_status_text, "Finalizing assets...", sizeof(update_status_text) - 1);
+    update_status_text[sizeof(update_status_text) - 1] = '\0';
     sleep(1); // Give it a brief moment to show success
     update_success = true;
     pthread_mutex_unlock(&update_mutex);
@@ -1259,7 +1265,8 @@ int main(void) {
                     current_state = STATE_DASHBOARD;
                     update_in_progress = false;
                     update_failed = false;
-                    strcpy(update_status_text, "Initializing...");
+                    strncpy(update_status_text, "Initializing...", sizeof(update_status_text) - 1);
+                    update_status_text[sizeof(update_status_text) - 1] = '\0';
                     pthread_mutex_unlock(&update_mutex);
                 }
             }
@@ -2038,7 +2045,8 @@ int main(void) {
             pthread_mutex_lock(&update_mutex);
             bool failed = update_failed;
             char status_copy[256];
-            strcpy(status_copy, update_status_text);
+            strncpy(status_copy, update_status_text, sizeof(status_copy) - 1);
+            status_copy[sizeof(status_copy) - 1] = '\0';
             pthread_mutex_unlock(&update_mutex);
 
             if (!failed) {
